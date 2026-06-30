@@ -11,5 +11,5 @@ with fixup("patches/missing-header.patch", when=in_range("abc123..def456")):
     run("cmake --build build -j")      # infra: a broken build ABORTS
 
 # The verdict: the test is flaky, so require 2 passes out of 5 to call it good.
-test("ctest --test-dir build -R regression", runs=5, need=2)
+test("ctest --test-dir build -R regression", attempts=5, min_passes=2)
 # reaching the end == GOOD

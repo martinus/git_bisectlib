@@ -9,7 +9,8 @@ hand-rolled bisect scripts painful:
 - **Builds vs. results.** A broken build is *infrastructure*, not a verdict —
   `run()` **aborts** the bisect so you can fix the recipe and resume, instead of
   silently skipping commits and mis-bisecting. `test()` is the actual verdict.
-- **Flaky tests.** `test("…", runs=5, need=2)` — require 2 passes out of 5.
+- **Flaky tests.** `test("…", attempts=5, min_passes=2)` — pass 2 of up to 5
+  tries (it stops as soon as the verdict is decided).
 - **Benchmarks.** `test("…", max_median=4.2, warmup=2)` — bisect a *performance*
   regression by median runtime.
 - **Per-range build fixes.** `fixup(patch=…)` / `replace(...)` apply a patch or a
@@ -33,7 +34,7 @@ from bisectlib import run, test
 
 run("cmake -B build")                 # infra: a broken configure ABORTS (exit 128)
 run("cmake --build build -j")         # infra: a broken build ABORTS
-test("ctest --test-dir build -R foo", runs=5, need=2)   # verdict: 2/5 => good
+test("ctest --test-dir build -R foo", attempts=5, min_passes=2)   # 2 of up to 5 => good
 # reaching the end == GOOD
 ```
 
@@ -61,7 +62,7 @@ test("./bench", max_median=4.2, warmup=2)  # …and stay fast
 | Verb | Meaning | On failure |
 |------|---------|------------|
 | `run(cmd, skip_on_error=False)` | infrastructure (configure/build/setup) | **abort** (or skip) |
-| `test(cmd, runs=1, need=None, max_median=None, warmup=0, bad_when="fail")` | the verdict | **bad** |
+| `test(cmd, attempts=1, min_passes=None, max_median=None, warmup=0, bad_when="fail")` | the verdict | **bad** |
 | `check(cmd) -> Result` | run once, **never exits** (introspection: `.ok`, `.out`, `.seconds`) | — |
 
 ```python

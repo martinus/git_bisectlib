@@ -9,7 +9,7 @@ no decorator, no return value. Falling off the end of the script == GOOD.
 
     run("cmake -B build")                 # infra: fail -> ABORT (exit 128)
     run("cmake --build build -j")         # infra: fail -> ABORT
-    test("ctest -R foo", runs=5, need=2)  # verdict: fail -> BAD (exit 1)
+    test("ctest -R foo", attempts=5, min_passes=2)  # flaky verdict: 2 of up to 5
     # reached the end -> GOOD (exit 0)
 
 Exit-code contract (what `git bisect run` reads):
@@ -19,10 +19,10 @@ Exit-code contract (what `git bisect run` reads):
     128         abort  (harness broken; bisect state preserved -> fix & resume)
 
 Verbs:
-    run(cmd, skip_on_error=False, ...)   infrastructure; ABORTS on error by default
-    test(cmd, runs=1, need=None, ...)    a verdict; pass->continue, fail->BAD.
-                                         Use several; they AND together.
-    check(cmd) -> Result                 runs once, NEVER exits (for introspection)
+    run(cmd, skip_on_error=False, ...)        infra; ABORTS on error by default
+    test(cmd, attempts=1, min_passes=None,…)  a verdict; pass->continue, fail->BAD.
+                                              Use several; they AND together.
+    check(cmd) -> Result                      runs once, NEVER exits (introspection)
     replace(path, old, new, ...)         sed-like edit, auto-reverted (clean tree)
     fixup(patch=/cherry_pick=, when=)    apply a patch/cherry-pick, auto-reverted
 """
@@ -422,7 +422,7 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
         _decide(ABORT)
 
 
-def test(cmd: str, *, runs: int = 1, need: Optional[int] = None,
+def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
          max_median: Optional[float] = None, warmup: int = 0,
          bad_when: str = "fail", passed: Optional[Callable[[Result], bool]] = None,
          timeout: Optional[float] = None, on_timeout: str = "skip",
@@ -433,53 +433,62 @@ def test(cmd: str, *, runs: int = 1, need: Optional[int] = None,
     several ``test`` calls and they combine with logical AND — any one failing is
     BAD; reaching the end of the recipe is GOOD. Returns the last Result on good.
 
-    runs/need express flakiness ("2 of 5"); max_median adds a perf gate; both
-    combine with logical AND. bad_when="pass" inverts the bug direction.
+    Flaky tests: ``attempts`` is the *maximum* number of tries and ``min_passes``
+    how many must pass. Evaluation **stops as soon as the verdict is known** — at
+    the moment ``min_passes`` is reached (good), or once the remaining attempts
+    can no longer reach it (bad) — so ``attempts`` is an upper bound, not a fixed
+    count. ``min_passes`` defaults to ``attempts`` (every attempt must pass).
+
+    ``max_median`` adds a perf gate (median runtime over the attempts must be
+    <= this); when set, all ``attempts`` run so the median is meaningful (no early
+    stop). ``warmup`` runs extra leading throwaway executions (excluded from the
+    pass count and timing). ``bad_when="pass"`` inverts the bug direction.
     """
     _announce()
     _echo_start("test", cmd)
     if passed is None:
         passed = lambda r: r.ok  # noqa: E731
-
-    non_warmup = max(0, runs - warmup)
-    if need is None:
-        need = non_warmup
+    if min_passes is None:
+        min_passes = attempts
 
     durations: list[float] = []
     passes = 0
     executed = 0
     last: Optional[Result] = None
-    for i in range(runs):
+    for i in range(warmup + attempts):
         res = _exec(cmd, timeout,
                     _commit_log_dir() / f"{len(_steps)+1:02d}-test-{i+1}.log")
         last = res
         if res.code == -1:  # timeout
             _record_step("test", cmd, res, False,
-                         extra={"runs": runs, "passes": passes, "timeout": True})
+                         extra={"attempts": attempts, "passes": passes,
+                                "timeout": True})
             _echo_result("test", cmd, False, res.seconds, on_timeout)
             _decide({"skip": SKIP, "bad": BAD, "abort": ABORT}.get(on_timeout, SKIP))
-        is_warmup = i < warmup
+        if i < warmup:
+            continue
+        executed += 1
+        durations.append(res.seconds)
         ok = passed(res)
         if bad_when == "pass":
             ok = not ok
-        if not is_warmup:
-            executed += 1
-            durations.append(res.seconds)
-            if ok:
-                passes += 1
-            # early stop when no perf gate and verdict already locked
-            if max_median is None:
-                if passes >= need:
-                    break
-                if (non_warmup - executed) < (need - passes):
-                    break
+        if ok:
+            passes += 1
+        # stop as soon as the verdict is locked in (only without a perf gate,
+        # which needs every sample for a meaningful median)
+        if max_median is None:
+            if passes >= min_passes:
+                break
+            if (attempts - executed) < (min_passes - passes):
+                break
 
     median = statistics.median(durations) if durations else 0.0
-    pass_ok = passes >= need
+    pass_ok = passes >= min_passes
     perf_ok = (max_median is None) or (median <= max_median)
     good = pass_ok and perf_ok
 
-    extra = {"runs": runs, "passes": passes, "need": need}
+    extra = {"attempts": attempts, "executed": executed,
+             "passes": passes, "min_passes": min_passes}
     if max_median is not None:
         extra.update({"median_s": round(median, 4), "max_median": max_median,
                       "durations_s": [round(d, 4) for d in durations]})

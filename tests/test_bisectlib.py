@@ -163,18 +163,22 @@ class TestEngine(unittest.TestCase):
         ev3 = json.loads(next(Path(cache3, "bisectlib").glob("*/*/eval.json")).read_text())
         self.assertEqual(len(ev3["steps"]), 1)  # second test did not run
 
-    def test_flaky_two_of_five(self):
+    def test_flaky_min_passes(self):
         d = make_repo()
-        # command passes its first 2 invocations, then fails -> 2/5
+        # command passes its first 2 invocations, then fails
         cmd = r"c=$(cat n 2>/dev/null || echo 0); c=$((c+1)); echo $c>n; [ $c -le 2 ]"
         body = ("import bisectlib as b\n"
-                f"b.test({cmd!r}, runs=5, need=2)\n")
-        code, _, _ = run_recipe(d, body)
-        self.assertEqual(code, 0)  # 2 passes meets need=2 -> good
-        # need=3 would not be met
+                f"b.test({cmd!r}, attempts=5, min_passes=2)\n")
+        code, _, cache = run_recipe(d, body)
+        self.assertEqual(code, 0)  # 2 passes meets min_passes=2 -> good
+        # early stop: should have stopped at 2 attempts (verdict locked)
+        ev = json.loads(next(Path(cache, "bisectlib").glob("*/*/eval.json")).read_text())
+        self.assertEqual(ev["steps"][0]["executed"], 2)
+
+        # min_passes=3 cannot be met (only 2 ever pass) -> bad
         d2 = make_repo()
         body2 = ("import bisectlib as b\n"
-                 f"b.test({cmd!r}, runs=5, need=3)\n")
+                 f"b.test({cmd!r}, attempts=5, min_passes=3)\n")
         code2, _, _ = run_recipe(d2, body2)
         self.assertEqual(code2, 1)  # bad
 

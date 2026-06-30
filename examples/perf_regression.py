@@ -13,4 +13,4 @@ run("cmake -B build -DCMAKE_BUILD_TYPE=Release")
 run("cmake --build build -j")
 
 # Verdict by performance: 7 samples (2 warmup), bad if the median exceeds 4.2s.
-test("./build/bench --run", runs=7, warmup=2, max_median=4.2)
+test("./build/bench --run", attempts=7, warmup=2, max_median=4.2)

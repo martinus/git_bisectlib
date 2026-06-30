@@ -98,7 +98,7 @@ from bisectlib import run, test
 
 run("cmake -B build")                 # infra: fail -> abort (exit 128)
 run("cmake --build build -j")         # infra: fail -> abort (exit 128)
-test("ctest -R foo", runs=5, need=2)  # verdict: fail -> bad (exit 1)
+test("ctest -R foo", attempts=5, min_passes=2)  # flaky verdict: 2 of up to 5
 # reached the end, no failure -> exit 0 (good)
 ```
 
@@ -167,25 +167,29 @@ and benchmarking live (the old `flaky`/`benchmark` ideas folded in here).
 
 ```python
 test(cmd,
-    runs=1,             # how many times to execute (default: single run)
-    need=None,          # passes required to count as "pass"; default None = all runs
+    attempts=1,         # MAX number of tries (default: single run)
+    min_passes=None,    # passes required for good; default None = all attempts
     max_median=None,    # seconds; passing-but-slower-than-this => BAD
-    warmup=0,           # leading runs excluded from timing stats (not from pass count)
+    warmup=0,           # extra leading throwaway runs (excluded from passes & timing)
     bad_when="fail",    # "fail"(default) | "pass" to invert the bug direction
     timeout=None,
     on_timeout="skip",  # "skip"(default) | "bad" | "abort"
     name=None)
 ```
 
+Evaluation **stops as soon as the verdict is known** — when `min_passes` is reached (good)
+or can no longer be reached (bad) — so `attempts` is an upper bound, not a fixed count.
+(With `max_median` set, all attempts run so the median is meaningful.)
+
 ```python
-test("ctest -R foo")                                  # single run: pass=good, fail=bad
-test("ctest -R foo", runs=5, need=2)                  # flaky: 2/5 passes => good
-test("./bench --run", runs=7, max_median=4.2, warmup=1)  # perf regression
-test("ctest -R foo", runs=5, need=2, max_median=2.0)  # functional + perf at once
-test("./repro", bad_when="pass")                      # bisecting when a bug got "fixed"
+test("ctest -R foo")                                       # single run: pass=good, fail=bad
+test("ctest -R foo", attempts=5, min_passes=2)             # flaky: 2 of up to 5 => good
+test("./bench --run", attempts=7, max_median=4.2, warmup=1)  # perf regression
+test("ctest -R foo", attempts=5, min_passes=2, max_median=2.0)  # functional + perf
+test("./repro", bad_when="pass")                           # bisecting when a bug got "fixed"
 ```
 
-When both `need=` and `max_median=` are set: **GOOD only if it passes the quorum AND
+When both `min_passes=` and `max_median=` are set: **GOOD only if it passes the quorum AND
 beats the median; BAD if either fails** (logical AND).
 
 ### 4.3 `check` — the dumb verb that never decides
@@ -320,10 +324,10 @@ These are the decisions made during brainstorming; treat as the starting default
    broken build stops the bisect so a human can fix the recipe, rather than silently
    skipping commits and risking a wrong result. `skip_on_error=True` for genuinely
    un-buildable ranges. `test` failure ⇒ bad.
-2. `test`: `runs=1`, `need=None` (=all) → single run unless asked otherwise.
+2. `test`: `attempts=1`, `min_passes=None` (=all) → single run unless asked otherwise.
 3. `warmup` excludes runs from **timing stats only**; the pass quorum is judged over the
    `runs - warmup` non-warmup executions.
-4. `need=` + `max_median=` combine with logical **AND** (GOOD needs both).
+4. `min_passes=` + `max_median=` combine with logical **AND** (GOOD needs both).
 5. `run` timeout → **abort** by default (broken harness); `test` timeout → `skip` by
    default (likely an infra hang); override `on_timeout="bad"` for infinite-loop hunts.
 6. `replace`/`fixup` `if_missing="skip"` / unmatched `when` → never silently build wrong.
@@ -574,7 +578,7 @@ captured `*.log` files:
   "steps": [
     {"verb":"run","cmd":"cmake -B build","code":0,"duration_s":4.1,"log":"01-run.log"},
     {"verb":"run","cmd":"cmake --build build -j","code":0,"duration_s":151.2,"log":"02-run.log"},
-    {"verb":"test","cmd":"ctest -R foo","outcome":"good","runs":5,"passes":2,"need":2,
+    {"verb":"test","cmd":"ctest -R foo","outcome":"good","attempts":5,"executed":5,"passes":2,"min_passes":2,
      "median_s":1.8,"max_median":2.0,"durations_s":[1.7,1.9,2.4,1.6,1.8],"log":"03-test.log"}
   ],
   "fixups": [{"kind":"replace","path":"CMakeLists.txt","detail":"c++14→c++17"}]
@@ -615,7 +619,7 @@ from bisectlib import run, test, fixup, in_range
 with fixup("fixes/missing-header.patch", when=in_range("abc123".."def456")):
     run("cmake -B build")             # broken build -> abort (go fix the recipe)
     run("cmake --build build -j")
-test("ctest -R regression", runs=5, need=2)   # flaky verdict: 2/5 => good
+test("ctest -R regression", attempts=5, min_passes=2)   # flaky: 2 of up to 5 => good
 ```
 
 ### 7.2 Perf regression with a one-line build fix
@@ -626,7 +630,7 @@ from bisectlib import run, test, replace
 replace("CMakeLists.txt", "c++14", "c++17")          # reverted automatically
 run("cmake -B build")
 run("cmake --build build -j")
-test("./build/bench --json", runs=7, warmup=2, max_median=4.2)
+test("./build/bench --json", attempts=7, warmup=2, max_median=4.2)
 ```
 
 ### 7.3 Introspection with `check`, plus a known-unbuildable range
