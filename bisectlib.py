@@ -229,8 +229,12 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
     The process group is killed on timeout.
     """
     start = time.monotonic()
+    workdir = _workdir(cwd)
+    # Keep PWD in sync with the real cwd (subprocess chdir's but doesn't update
+    # PWD; child scripts that read $PWD instead of getcwd() would see a stale dir).
+    env = {**os.environ, "PWD": os.path.abspath(workdir)}
     proc = subprocess.Popen(
-        cmd, shell=True, cwd=_workdir(cwd),
+        cmd, shell=True, cwd=workdir, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         bufsize=1, start_new_session=True,
     )

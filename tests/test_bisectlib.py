@@ -214,6 +214,8 @@ class TestEngine(unittest.TestCase):
         Path(d, "sub", "here").write_text("x")
         body = ("import bisectlib as b\n"
                 "assert b.check('basename $(pwd)', cwd='sub').out.strip() == 'sub'\n"
+                # $PWD is kept in sync with the real cwd (not stale)
+                "assert b.check('basename $PWD', cwd='sub').out.strip() == 'sub'\n"
                 "b.run('test -f here', cwd='sub')\n"   # relative to sub -> found
                 "b.test('test -f here', cwd='sub')\n")
         code, _, _ = run_recipe(d, body)
