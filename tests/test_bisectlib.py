@@ -113,6 +113,36 @@ class TestFindAnchorsAndDriver(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"FIRSTBAD {bug}", p.stdout)
 
+    def test_driver_aborts_then_resumes(self):
+        d, shas = make_linear(n=16, bug_at=10)
+        good, bad, bug = shas[0], shas[-1], shas[9]
+        # broken recipe: requires a marker that doesn't exist -> run() aborts
+        Path(d, "recipe.py").write_text(
+            "import sys; sys.path.insert(0, %r)\n" % str(ROOT)
+            + "import bisectlib as b\n"
+            "b.run('test -f NEEDED')\nb.test('! grep -q BUG code.txt')\n")
+        drive = (
+            "import sys; sys.path.insert(0, %r)\n" % str(ROOT)
+            + "import bisectlib as b\n"
+            f"r = b.bisect({good!r}, {bad!r}, 'recipe.py')\n"
+            "print('FB', r.first_bad if r and r.first_bad else None)\n"
+            "print('BISECTING', b.bisecting())\n"
+        )
+        cache = tempfile.mkdtemp(prefix="bl-cache-")
+        p1 = run_script(d, "drive.py", drive, env={"XDG_CACHE_HOME": cache})
+        self.assertEqual(p1.returncode, 0, p1.stderr)
+        self.assertIn("FB None", p1.stdout)          # aborted: no culprit yet
+        self.assertIn("BISECTING True", p1.stdout)   # state preserved
+
+        # fix the recipe, call bisect() again -> resumes (no restart) -> culprit
+        Path(d, "recipe.py").write_text(
+            "import sys; sys.path.insert(0, %r)\n" % str(ROOT)
+            + "import bisectlib as b\nb.test('! grep -q BUG code.txt')\n")
+        p2 = run_script(d, "drive.py", drive, env={"XDG_CACHE_HOME": cache})
+        self.assertEqual(p2.returncode, 0, p2.stderr)
+        self.assertIn(f"FB {bug}", p2.stdout)
+        self.assertIn("resuming", p2.stderr)
+
 
 class TestEngine(unittest.TestCase):
     def test_end_of_script_is_good(self):

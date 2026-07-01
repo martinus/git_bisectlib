@@ -217,21 +217,42 @@ def find_anchors(bad: str = "HEAD", *, probe: Callable[[], Optional[bool]],
         _checkout(orig)
 
 
+def bisecting() -> bool:
+    """True if a `git bisect` session is currently in progress."""
+    return subprocess.run(
+        ["git", "bisect", "log"], cwd=_toplevel(), capture_output=True
+    ).returncode == 0
+
+
 # ----------------------------------------------------------------------- driver
 def bisect(good: str, bad: str, recipe: str, *, python: Optional[str] = None,
            render: bool = True, reset: bool = False,
            args: tuple = ()) -> Optional["object"]:
     """Convenience driver: run a whole bisect from Python.
 
-    Shells out to ``git bisect start <bad> <good>`` then
-    ``git bisect run <python> <recipe> [args...]``. When `render` is set, writes
-    the final status report (via bisectlog) and prints the first bad commit.
-    Returns the bisectlog ``Report`` (or None). Pass reset=True to end the
-    bisect afterwards; by default the state is left so you can inspect it.
+    Runs ``git bisect start <bad> <good>`` (only if not already bisecting) then
+    ``git bisect run <python> <recipe> [args...]``.
+
+    **Resumable.** If the recipe aborts (exit >=128) the bisect stops with its
+    state preserved. Fix the recipe and simply call ``bisect(...)`` again: it
+    detects the in-progress session and **resumes** (re-running ``git bisect run``
+    without restarting; the good/bad arguments are ignored). Bisect state is kept
+    on abort even if ``reset=True``, so you never lose progress.
+
+    When `render` is set, writes the status report (via bisectlog) and prints the
+    first bad commit. Returns the bisectlog ``Report`` (or None). Pass reset=True
+    to end the bisect after a *successful* run.
     """
     python = python or sys.executable
-    _git("bisect", "start", _git("rev-parse", bad), _git("rev-parse", good))
-    subprocess.run(["git", "bisect", "run", python, recipe, *args])
+    resuming = bisecting()
+    if resuming:
+        sys.stderr.write(
+            "bisectlib: a bisect is already in progress — resuming where it "
+            "stopped (good/bad arguments ignored; `git bisect reset` to start over).\n")
+    else:
+        _git("bisect", "start", _git("rev-parse", bad), _git("rev-parse", good))
+    proc = subprocess.run(["git", "bisect", "run", python, recipe, *args])
+    aborted = proc.returncode != 0  # git bisect run exits nonzero on abort (>=128)
 
     report = None
     if render:
@@ -249,7 +270,12 @@ def bisect(good: str, bad: str, recipe: str, *, python: Optional[str] = None,
                         f"{report.subject(report.first_bad)}\n")
         except Exception:
             pass
-    if reset:
+
+    if aborted:
+        sys.stderr.write(
+            "bisectlib: recipe aborted — bisect state kept. Fix the recipe and "
+            "call bisect(...) again (or re-run `git bisect run`) to resume.\n")
+    elif reset:
         _git("bisect", "reset")
     return report
 

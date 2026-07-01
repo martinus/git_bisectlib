@@ -106,6 +106,24 @@ from bisectlib import run, test, check, replace, fixup, in_range, find_anchors, 
 
 An uncaught exception in a recipe **aborts** (128) — never misread as "bad".
 
+### Abort → fix the recipe → resume
+
+Abort is the *"my harness is wrong"* signal, and it's designed to be recovered
+from: git keeps the whole bisect state (good/bad/skip refs) when the recipe
+exits ≥128, with the failing commit checked out. Fix the recipe, then **re-run
+the same command** — do *not* run `git bisect start` again, which would reset:
+
+```sh
+git bisect start <bad> <good>
+git bisect run python recipe.py     # aborts on a broken recipe → state kept
+#   … edit recipe.py (add a fixup, set skip_on_error=True, fix a typo) …
+git bisect run python recipe.py     # SAME command → re-tests the current commit and continues
+```
+
+The `bisect()` driver does this for you: if a bisect is already in progress it
+**resumes** instead of restarting, and it never resets on abort — so you just
+call `bisect(good, bad, "recipe.py")` again after fixing the recipe.
+
 ## bisectlog (the report renderer)
 
 `bisectlog` is a standalone, **read-only** CLI that renders any `git bisect`
