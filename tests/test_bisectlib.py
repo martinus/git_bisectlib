@@ -275,28 +275,38 @@ class TestEngine(unittest.TestCase):
         # and the old "bisectlog status:" announcement is gone
         self.assertNotIn("bisectlog status", stderr)
 
-    def test_once_runs_only_first_time(self):
+    def test_is_first_run_only_first_time(self):
         d = make_repo()
-        # each invocation appends to a counter file; once() should run it just once
+        # setup in the guard appends to a counter; it must run on the first
+        # evaluation only, across repeated invocations of the same bisect session
         body = ("import bisectlib as b\n"
-                "b.once('echo x >> counter')\n"
+                "if b.is_first_run():\n"
+                "    b.run('echo x >> counter')\n"
                 "b.test('true')\n")
-        cache = tempfile.mkdtemp(prefix="bl-once-")
-        for _ in range(3):  # simulate three commit evaluations (same bisect id)
+        cache = tempfile.mkdtemp(prefix="bl-first-")
+        for _ in range(3):
             code, _, _ = run_recipe(d, body, cache=cache)
             self.assertEqual(code, 0)
         self.assertEqual(len(Path(d, "counter").read_text().split()), 1)  # ran once
 
-    def test_once_failure_aborts_and_retries(self):
+    def test_is_first_run_reruns_after_abort(self):
         d = make_repo()
-        cache = tempfile.mkdtemp(prefix="bl-once2-")
-        # failing once() aborts and does NOT record the marker
-        code, _, _ = run_recipe(d, "import bisectlib as b\nb.once('false')\n", cache=cache)
+        cache = tempfile.mkdtemp(prefix="bl-first2-")
+        # first-run setup aborts -> marker NOT committed
+        abort_body = ("import bisectlib as b\n"
+                      "if b.is_first_run():\n"
+                      "    b.run('echo x >> counter')\n"   # runs, then...
+                      "    b.run('false')\n")             # aborts
+        code, _, _ = run_recipe(d, abort_body, cache=cache)
         self.assertEqual(code, 128)  # ABORT
-        # ... so a later (fixed) run actually runs it
-        code2, _, _ = run_recipe(
-            d, "import bisectlib as b\nb.once('false', skip_on_error=True)\n", cache=cache)
-        self.assertEqual(code2, 125)  # SKIP (still fails, but marker still not set)
+        # ... so on the next run is_first_run() is still True and setup re-runs
+        ok_body = ("import bisectlib as b\n"
+                   "if b.is_first_run():\n"
+                   "    b.run('echo x >> counter')\n"
+                   "b.test('true')\n")
+        code2, _, _ = run_recipe(d, ok_body, cache=cache)
+        self.assertEqual(code2, 0)
+        self.assertEqual(len(Path(d, "counter").read_text().split()), 2)  # ran again
 
     def test_check_does_not_exit(self):
         d = make_repo()

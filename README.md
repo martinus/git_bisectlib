@@ -93,14 +93,25 @@ test("./bench", attempts=5, min_passes=3, passed=lambda r: r.seconds < 6.7)  # m
 (`min(times)<T` → `min_passes=1`; `max(times)<T` → all; `median<T` → majority.)
 
 ```python
-from bisectlib import run, test, check, once, good, bad, skip, abort, replace, fixup, in_range
+from bisectlib import (run, test, check, is_first_run,
+                       good, bad, skip, abort, replace, fixup, in_range)
 ```
 
-- **`once(cmd)`** — one-time setup that runs **once per bisect session** (fetch a
-  dependency, create a symlink), not on every commit. It runs the first time it's
-  reached, then a marker (keyed by the bisect id) makes later commits skip it. Its
-  artifacts must survive `git checkout` (untracked / outside the tree). Use it for
-  what's the same on every commit; use `run` for what must be rebuilt per commit.
+- **`is_first_run()`** — guard one-time, commit-independent setup so it doesn't
+  repeat on every commit:
+
+  ```python
+  if is_first_run():
+      run("./fetch-deps")          # fetch a dependency, create a symlink, …
+      run("ln -fs $(pwd)/… …")
+  ```
+
+  Returns True on the first commit evaluated in the bisect, False after. The
+  "already ran" marker (keyed by the bisect id) is committed only once that
+  evaluation finishes with a real verdict — *not* on abort — so a setup that fails
+  re-runs next time. Its artifacts must survive `git checkout` (untracked / outside
+  the tree). Use it for what's the same on every commit; use `run` for what must be
+  rebuilt per commit.
 - **`replace(path, old, new)`** — sed-like edit, auto-reverted. `old` is a literal
   `str` or a compiled `re.Pattern` (the *type* decides; no `regex=` flag).
 - **`fixup(patch=… | cherry_pick=…, when=…)`** — context manager that applies a
