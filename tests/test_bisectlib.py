@@ -244,6 +244,24 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(run_recipe(d, "import bisectlib as b\nb.good()\nb.bad()\n")[0], 0)
         self.assertEqual(run_recipe(d, "import bisectlib as b\nb.abort()\n")[0], 128)
 
+    def test_git_env_stripped(self):
+        # git exports GIT_DIR/GIT_PREFIX/... under `git bisect run`; they must not
+        # leak into recipe commands (or `git` inside them resolves the wrong repo).
+        d = make_repo()
+        body = ("import bisectlib as b\n"
+                "assert b.check('echo D=$GIT_DIR W=$GIT_WORK_TREE P=$GIT_PREFIX')"
+                ".out.strip() == 'D= W= P=', 'git env leaked'\n")
+        Path(d, "recipe.py").write_text(
+            "import sys; sys.path.insert(0, %r)\n" % str(ROOT) + body)
+        # inject the vars into the recipe's own environment, as `git bisect run`
+        # does (pointing at the REAL repo, so bisectlib's own git calls still work)
+        env = {**os.environ, "PYTHONPATH": str(ROOT), "NO_COLOR": "1",
+               "GIT_DIR": os.path.join(d, ".git"), "GIT_WORK_TREE": d,
+               "GIT_PREFIX": "sub/"}
+        p = subprocess.run([sys.executable, "recipe.py"], cwd=d,
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
     def test_streams_command_output(self):
         d = make_repo()
         body = ("import bisectlib as b\n"

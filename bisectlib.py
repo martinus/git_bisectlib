@@ -219,6 +219,25 @@ class Result:
         return self.code == 0
 
 
+# git exports these per-invocation while running a `git bisect run` command; if
+# they leak into the recipe's commands, any `git` those commands call resolves
+# against git's bisect context instead of discovering from the directory — the
+# classic "works when I run it, breaks under `git bisect run`" trap. Strip them so
+# commands behave exactly as in a plain shell.
+_GIT_ENV_STRIP = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX",
+    "GIT_NAMESPACE", "GIT_COMMON_DIR", "GIT_INTERNAL_GETTEXT_TEST_HARNESS",
+)
+
+
+def _clean_env(workdir: str) -> dict:
+    """Environment for spawned commands: git's per-invocation vars removed, and
+    PWD kept in sync with the real cwd (subprocess chdir's but leaves PWD stale)."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_STRIP}
+    env["PWD"] = os.path.abspath(workdir)
+    return env
+
+
 def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
           cwd: Optional[str] = None) -> Result:
     """Run a shell command, streaming its output live while also capturing it.
@@ -230,9 +249,7 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
     """
     start = time.monotonic()
     workdir = _workdir(cwd)
-    # Keep PWD in sync with the real cwd (subprocess chdir's but doesn't update
-    # PWD; child scripts that read $PWD instead of getcwd() would see a stale dir).
-    env = {**os.environ, "PWD": os.path.abspath(workdir)}
+    env = _clean_env(workdir)
     proc = subprocess.Popen(
         cmd, shell=True, cwd=workdir, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
