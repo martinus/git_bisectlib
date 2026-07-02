@@ -37,6 +37,14 @@ type-checkers resolve `run`, `test`, … without warnings. See
 [Install / how a recipe finds `bisectlib`](#install--how-a-recipe-finds-bisectlib)
 for a zero-install alternative.
 
+**Updating a git install:** re-running the command above is a no-op if the
+version number hasn't changed — pip sees it already installed and skips the
+rebuild. To force a refresh from the latest `main`:
+
+```sh
+pip install --force-reinstall git+https://github.com/martinus/bisectlib
+```
+
 ## A recipe in 4 lines
 
 ```python
