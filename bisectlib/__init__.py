@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -641,15 +641,13 @@ def replace(path: str, old: Union[str, "re.Pattern"], new: str, *,
         _decide(SKIP if if_missing == "skip" else ABORT)
     _register_revert_path(path)
     p.write_text(new_text)
+    # Record the full replacement (not truncated) so the report can show it in
+    # its entirety; the renderer wraps it in backticks.
+    old_str = old.pattern if isinstance(old, re.Pattern) else str(old)
     _final.setdefault("fixups", []).append(
         {"kind": "replace", "path": path,
-         "detail": f"{_short(old)}→{_short(new)}"})
+         "detail": f"{old_str} → {new}"})
     sys.stderr.write(f"  edit {path}: {n} replacement(s)\n")
-
-
-def _short(s) -> str:
-    s = s.pattern if isinstance(s, re.Pattern) else str(s)
-    return (s[:20] + "…") if len(s) > 21 else s
 
 
 # ---------------------------------------------------------------------- fixup

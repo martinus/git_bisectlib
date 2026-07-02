@@ -197,18 +197,18 @@ bisectlog --details             # include recorded commands/timings per commit (
 ```
 
 Run bare, it prints a compact terminal table — one line per evaluation (input range
-`bad`/`good` → `midpoint` → status), colored by status, `cmts` = commits still in the
+`good`/`bad` → `midpoint` → status), colored by status, `cmts` = commits still in the
 range, subjects shortened to fit, with the first-bad commit called out:
 
 ```
 bisect  good 2801e957a  bad 79cb050c2
 🎯 first bad commit  5c9dcafb3  commit 8: tune the allocator
 
-       bad       good      midpoint   cmts  subject
-✓ good 79cb050c2 2801e957a 9a8b7c9d1    11  refactor the parser subsystem
-✗ bad  79cb050c2 9a8b7c9d1 95345541b     6  add a caching layer
-✗ bad  95345541b 9a8b7c9d1 5c9dcafb3     3  tune the allocator
-✓ good 5c9dcafb3 9a8b7c9d1 19d89b121     2  optimize the hot loop
+       good      bad       midpoint   cmts  subject
+✓ good 2801e957a 79cb050c2 9a8b7c9d1    11  refactor the parser subsystem
+✗ bad  9a8b7c9d1 79cb050c2 95345541b     6  add a caching layer
+✗ bad  9a8b7c9d1 95345541b 5c9dcafb3     3  tune the allocator
+✓ good 9a8b7c9d1 5c9dcafb3 19d89b121     2  optimize the hot loop
 ```
 
 ```
@@ -217,18 +217,19 @@ bisect  good 2801e957a  bad 79cb050c2
 
 ## 🎯 First bad commit: `5c9dcafb3` — commit 8: change subsystem 8
 
-| bad | good | midpoint | range | status |
-|-----|------|----------|-------|--------|
-| `79cb050c2` 2026-06-24 13:02, Alice | `2801e9572` 2026-05-28 22:06, Bob | `cb5394973` 2026-06-12 06:06, Carol | … · 11 commits | ✅ good |
-| `79cb050c2` 2026-06-24 13:02, Alice | `cb5394973` 2026-06-12 06:06, Carol | `95345541b` 2026-06-18 09:12, Dan | … ·  6 commits | ❌ bad · 81.2s |
-| `95345541b` 2026-06-18 09:12, Dan | `cb5394973` 2026-06-12 06:06, Carol | `5c9dcafb3` 2026-06-15 11:40, Eve | … ·  3 commits | ❌ bad |
-| `5c9dcafb3` 2026-06-15 11:40, Eve | `cb5394973` 2026-06-12 06:06, Carol | `19d89b121` 2026-06-13 08:20, Fay | … ·  2 commits | ✅ good |
+| good | bad | midpoint | range | status |
+|------|-----|----------|-------|--------|
+| `2801e9572` 2026-05-28 22:06, Bob | `79cb050c2` 2026-06-24 13:02, Alice | `cb5394973` 2026-06-12 06:06, Carol | 27d 15h · 11 commits | 🟢 good |
+| `cb5394973` 2026-06-12 06:06, Carol | `79cb050c2` 2026-06-24 13:02, Alice | `95345541b` 2026-06-18 09:12, Dan | 12d 7h · 6 commits | 🔴 bad · 81.2s |
+| `cb5394973` 2026-06-12 06:06, Carol | `95345541b` 2026-06-18 09:12, Dan | `5c9dcafb3` 2026-06-15 11:40, Eve | 6d 3h · 3 commits | 🔴 bad |
+| `cb5394973` 2026-06-12 06:06, Carol | `5c9dcafb3` 2026-06-15 11:40, Eve | `19d89b121` 2026-06-13 08:20, Fay | 3d 5h · 2 commits | 🟢 good |
 ```
 
-Each `bad`/`good`/`midpoint` cell is the commit hash plus its **commit date and
-author** (the subject is omitted to keep rows compact).
+Each `good`/`bad`/`midpoint` cell is the commit hash plus its **commit date and
+author** (the subject is omitted to keep rows compact); the **range** column is the
+`good..bad` span (duration · commit count).
 
-Each row reads in causal order: the **input range** (`bad`/`good`) → the
+Each row reads in causal order: the **input range** (`good`/`bad`) → the
 **midpoint** git chose → the **status**. Watch the range funnel down.
 
 ## Install / how a recipe finds `bisectlib`
