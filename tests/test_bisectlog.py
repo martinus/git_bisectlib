@@ -101,6 +101,51 @@ class TestBisectlog(unittest.TestCase):
         self.assertEqual(secs, 15 * 86400)
         self.assertEqual(bisectlog.fmt_date("2026-01-16T12:00:00Z"), "2026-01-16 12:00")
 
+    def test_good_bound_advances_without_ancestry(self):
+        # Regression: in a merge DAG (or shallow clone) the newly-good commit need
+        # not be a topological descendant of the prior good, so the old ancestry
+        # gate froze the good bound and the range. Trust git for evaluation goods.
+        d, shas = make_repo(n=16, bug_at=11)
+        script = Path(d, "t.sh")
+        script.write_text("#!/bin/sh\ngrep -q BUG code.txt && exit 1\nexit 0\n")
+        script.chmod(0o755)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        run(d, "git", "bisect", "run", "./t.sh")
+        orig = bisectlog.is_ancestor
+        bisectlog.is_ancestor = lambda *a, **k: False  # ancestry can't confirm
+        try:
+            rep = bisectlog.build_report(d)
+        finally:
+            bisectlog.is_ancestor = orig
+        goods = [r.good for r in rep.rows]
+        self.assertGreater(len(set(goods)), 1, "good bound never advanced")
+        # ranges must shrink monotonically as bounds tighten
+        counts = [r.n_commits for r in rep.rows]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+        run(d, "git", "bisect", "reset")
+
+    def test_in_flight_row_falls_back_to_sidecar(self):
+        import json
+        d, shas = make_repo(n=16, bug_at=11)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        head = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        logs = tempfile.mkdtemp(prefix="bl-logs-")
+        sc = Path(logs, head)
+        sc.mkdir()
+        (sc / "eval.json").write_text(json.dumps(
+            {"sha": head, "outcome": "good", "exit_code": 0, "pending": True,
+             "steps": [{"verb": "run", "cmd": "configure", "code": 0}]}))
+        orig = bisectlog.is_ancestor
+        bisectlog.is_ancestor = lambda *a, **k: False  # ancestry can't confirm range
+        try:
+            with_sc = bisectlog.build_report(d, logs_dir=logs)
+            without_sc = bisectlog.build_report(d)  # no sidecar → no invented row
+        finally:
+            bisectlog.is_ancestor = orig
+        self.assertIn(head, [r.midpoint for r in with_sc.rows])
+        self.assertNotIn(head, [r.midpoint for r in without_sc.rows])
+        run(d, "git", "bisect", "reset")
+
     def test_cells_show_date_and_author_not_subject(self):
         d, shas = make_repo(n=8, bug_at=5)
         run(d, "git", "bisect", "start", shas[-1], shas[0])

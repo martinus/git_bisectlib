@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -266,7 +266,13 @@ def build_report(
                 _anchor_good(sha)
             else:            # evaluation
                 add_row(sha, "good")
-                set_good(sha)
+                # Trust git: an evaluation `good` is the new good bound (git only
+                # marks commits it picked inside the range), exactly mirroring how
+                # a `bad` sets current_bad. Do NOT gate this on ancestry — in a
+                # DAG the newly-good commit need not be a descendant of the prior
+                # good, and on shallow clones the check can't be verified, either
+                # of which would otherwise freeze the good bound and the range.
+                current_good = sha
         elif term == "skip":
             if ready():
                 add_row(sha, "skip")
@@ -293,11 +299,20 @@ def build_report(
         and head
         and head not in seen_midpoints
         and head != current_good
-        and is_ancestor(repo, current_good, head)
-        and is_ancestor(repo, head, current_bad)
     ):
-        add_row(head, "todo")
-        in_progress = True
+        within_range = (
+            is_ancestor(repo, current_good, head)
+            and is_ancestor(repo, head, current_bad)
+        )
+        # A per-commit sidecar written by the engine is proof HEAD is the commit
+        # being evaluated right now — trust it when the ancestry checks can't
+        # confirm the range (shallow/grafted clone, or an anchor good that isn't a
+        # topological ancestor of the midpoint). This keeps status.md live (the
+        # in-flight row and its steps refresh after every command) on such repos.
+        has_sidecar = bool(logs_dir) and (Path(logs_dir) / head / "eval.json").is_file()
+        if within_range or has_sidecar:
+            add_row(head, "todo")
+            in_progress = True
 
     # Gather subjects + dates for every sha we reference.
     shas = set()
