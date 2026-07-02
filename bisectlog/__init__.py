@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 STATUS_ICON = {"good": "✅", "bad": "❌", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 

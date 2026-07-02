@@ -24,6 +24,19 @@ It is **pure standard library** — no dependencies, just `git` on your `PATH`.
 
 See [`SPEC.md`](SPEC.md) for the full design rationale.
 
+## Install
+
+```sh
+pip install git+https://github.com/martinus/bisectlib
+```
+
+That single command gives you `import bisectlib` for recipes plus the
+`bisectlog` / `git-bisectlog` report CLIs. It's pure standard library — no
+runtime dependencies — and ships type information (`py.typed`), so editors and
+type-checkers resolve `run`, `test`, … without warnings. See
+[Install / how a recipe finds `bisectlib`](#install--how-a-recipe-finds-bisectlib)
+for a zero-install alternative.
+
 ## A recipe in 4 lines
 
 ```python
