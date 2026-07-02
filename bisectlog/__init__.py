@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -615,8 +615,11 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
                 for s in r.sidecar.steps:
                     dur = f"{s.duration_s:.3g}s" if s.duration_s is not None else ""
                     code = "" if s.code is None else str(s.code)
+                    # link the step to its captured log file (relative to status.md,
+                    # which sits alongside the per-commit <sha>/ log dirs)
+                    step = f"[{s.verb}]({r.midpoint}/{s.log})" if s.log else s.verb
                     lines.append(
-                        f"| {s.verb} | `{s.cmd}` | {code} | {dur} |"
+                        f"| {step} | `{s.cmd}` | {code} | {dur} |"
                     )
                 lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -760,8 +763,10 @@ def _render_detail_html(r: Row) -> str:
     for s in sc.steps:
         dur = f"{s.duration_s:.3g}s" if s.duration_s is not None else ""
         code = "" if s.code is None else str(s.code)
+        step = (f'<a href="{_h(r.midpoint)}/{_h(s.log)}">{_h(s.verb)}</a>'
+                if s.log else _h(s.verb))
         parts.append(
-            f"<tr><td>{_h(s.verb)}</td><td><code>{_h(s.cmd)}</code></td>"
+            f"<tr><td>{step}</td><td><code>{_h(s.cmd)}</code></td>"
             f"<td>{code}</td><td>{dur}</td></tr>"
         )
     parts.append("</tbody></table>")

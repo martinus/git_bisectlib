@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -524,10 +524,10 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
     executed = 0
     last: Optional[Result] = None
     idx, slug = len(_steps) + 1, _slug(cmd)
-    log_name = f"{idx:02d}-test-{slug}.log"
+    log_name = f"{idx:02d}-test-{slug}-1.log"  # actual file of the last attempt run
     for i in range(warmup + attempts):
-        res = _exec(cmd, timeout,
-                    _commit_log_dir() / f"{idx:02d}-test-{slug}-{i+1}.log", cwd)
+        log_name = f"{idx:02d}-test-{slug}-{i+1}.log"
+        res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
         last = res
         if res.code == -1:  # timeout
             _record_step("test", cmd, res, False, log=log_name,

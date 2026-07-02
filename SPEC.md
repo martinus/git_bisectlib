@@ -581,7 +581,9 @@ The richer detail (commands, per-step exit codes, exact timings, flaky ratio, be
 timing, fixups) comes **solely from each commit's `eval.json` sidecar**, which the engine
 writes into the per-commit log dir (`<cache>/bisectlib/<session>/<sha>/`) next to the
 captured `*.log` files (named `NN-<verb>-<slug-of-command>.log`, e.g.
-`01-run-cmake-b-build.log`):
+`01-run-cmake-b-build.log`; a `test` records the last attempt's file,
+`NN-test-<slug>-<attempt>.log`). Each step's `log` is a real filename, so the
+report's **step** cell links to it (`<sha>/<log>`, relative to `status.md`):
 
 ```json
 {

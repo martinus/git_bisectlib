@@ -198,6 +198,23 @@ class TestBisectlog(unittest.TestCase):
         self.assertNotIn("commit 8", table)                  # subject NOT in cells
         run(d, "git", "bisect", "reset")
 
+    def test_step_links_to_log_file(self):
+        import json
+        d, shas = make_repo(n=8, bug_at=5)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        head = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        logs = tempfile.mkdtemp(prefix="bl-logs-")
+        sc = Path(logs, head)
+        sc.mkdir()
+        (sc / "eval.json").write_text(json.dumps(
+            {"sha": head, "outcome": "good", "exit_code": 0, "pending": False,
+             "steps": [{"verb": "run", "cmd": "make", "code": 0, "duration_s": 1.0,
+                        "log": "01-run-make.log"}]}))
+        rep = bisectlog.build_report(d, logs_dir=logs)
+        md = bisectlog.render_markdown(rep, details=True)
+        self.assertIn(f"[run]({head}/01-run-make.log)", md)   # step cell is a link
+        run(d, "git", "bisect", "reset")
+
     def test_in_progress_row_uses_finalized_sidecar_verdict(self):
         import json
         d, shas = make_repo(n=8, bug_at=5)

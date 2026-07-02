@@ -352,6 +352,26 @@ class TestEngine(unittest.TestCase):
         # once finalized, the sidecar carries the locked-in verdict (not pending),
         # so the renderer can show the real status instead of a perpetual `todo`
         self.assertEqual(data["pending"], False)
+        # each step's recorded `log` names a file that actually exists next to the
+        # sidecar, so the status.md step links resolve
+        commit_dir = evals[0].parent
+        for step in data["steps"]:
+            self.assertTrue(step["log"], "step is missing a log filename")
+            self.assertTrue((commit_dir / step["log"]).is_file(),
+                            f"log file {step['log']} does not exist")
+
+    def test_multi_attempt_test_log_exists(self):
+        # a flaky `test` writes one file per attempt; the recorded log must point
+        # at a real one (not the bare base name)
+        d = make_repo()
+        body = ("import bisectlib as b\n"
+                "b.test('true', attempts=3, min_passes=2)\n")
+        code, _, cache = run_recipe(d, body)
+        self.assertEqual(code, 0)
+        ev = next(Path(cache, "bisectlib").glob("*/*/eval.json"))
+        step = json.loads(ev.read_text())["steps"][0]
+        self.assertRegex(step["log"], r"-test-.*-\d+\.log$")
+        self.assertTrue((ev.parent / step["log"]).is_file())
 
 
 if __name__ == "__main__":
