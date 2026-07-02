@@ -476,15 +476,16 @@ Five columns:
 
 | Column | Content |
 |---|---|
-| **bad** | bad bound of the input range — **commit hash + subject** |
-| **good** | good bound of the input range — **commit hash + subject** |
-| **midpoint** | the commit picked to evaluate this step — **commit hash + subject** |
+| **bad** | bad bound of the input range — **commit hash + date + author** |
+| **good** | good bound of the input range — **commit hash + date + author** |
+| **midpoint** | the commit picked to evaluate this step — **commit hash + date + author** |
 | **range** | text field describing the `good..bad` range: **start date, end date, duration, and commit count** |
 | **status** | evaluation result with an icon: `🕒 todo` / `✅ good` / `❌ bad` / `⏭️ skip` (`🛑 abort`) |
 
-Multi-value cells stack their lines with `<br>` so the table stays one row per
-evaluation. `status: 🕒 todo` is written the moment evaluation starts and updated in place
-when the result lands.
+Each commit cell shows the short hash, its commit date, and author (the subject is
+omitted to keep rows compact). `status: 🕒 todo` marks the in-flight commit; once the
+recipe locks in a verdict its sidecar records it (`pending: false`) so the saved
+`status.md` shows the real result even before git records the mark.
 
 ```markdown
 # Bisect: my_flaky_test regression
@@ -582,7 +583,7 @@ captured `*.log` files (named `NN-<verb>-<slug-of-command>.log`, e.g.
 
 ```json
 {
-  "sha": "9a8b7c…", "outcome": "good", "exit_code": 0, "duration_s": 192.4,
+  "sha": "9a8b7c…", "outcome": "good", "exit_code": 0, "pending": false, "duration_s": 192.4,
   "steps": [
     {"verb":"run","cmd":"cmake -B build","code":0,"duration_s":4.1,"log":"01-run-cmake-b-build.log"},
     {"verb":"run","cmd":"cmake --build build -j","code":0,"duration_s":151.2,"log":"02-run-cmake-build-build-j.log"},

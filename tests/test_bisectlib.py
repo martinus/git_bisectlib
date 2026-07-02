@@ -349,6 +349,9 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(len(data["steps"]), 2)
         self.assertEqual(data["steps"][0]["verb"], "run")
         self.assertEqual(data["steps"][1]["verb"], "test")
+        # once finalized, the sidecar carries the locked-in verdict (not pending),
+        # so the renderer can show the real status instead of a perpetual `todo`
+        self.assertEqual(data["pending"], False)
 
 
 if __name__ == "__main__":

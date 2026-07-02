@@ -219,11 +219,14 @@ bisect  good 2801e957a  bad 79cb050c2
 
 | bad | good | midpoint | range | status |
 |-----|------|----------|-------|--------|
-| `79cb050c2`<br>commit 12 | `2801e9572`<br>commit 1 | `cb5394973`<br>commit 6 | … · 11 commits | ✅ good |
-| `79cb050c2`<br>commit 12 | `cb5394973`<br>commit 6 | `95345541b`<br>commit 9 | … ·  6 commits | ❌ bad |
-| `95345541b`<br>commit 9  | `cb5394973`<br>commit 6 | `5c9dcafb3`<br>commit 8 | … ·  3 commits | ❌ bad |
-| `5c9dcafb3`<br>commit 8  | `cb5394973`<br>commit 6 | `19d89b121`<br>commit 7 | … ·  2 commits | ✅ good |
+| `79cb050c2` 2026-06-24 13:02, Alice | `2801e9572` 2026-05-28 22:06, Bob | `cb5394973` 2026-06-12 06:06, Carol | … · 11 commits | ✅ good |
+| `79cb050c2` 2026-06-24 13:02, Alice | `cb5394973` 2026-06-12 06:06, Carol | `95345541b` 2026-06-18 09:12, Dan | … ·  6 commits | ❌ bad · 81.2s |
+| `95345541b` 2026-06-18 09:12, Dan | `cb5394973` 2026-06-12 06:06, Carol | `5c9dcafb3` 2026-06-15 11:40, Eve | … ·  3 commits | ❌ bad |
+| `5c9dcafb3` 2026-06-15 11:40, Eve | `cb5394973` 2026-06-12 06:06, Carol | `19d89b121` 2026-06-13 08:20, Fay | … ·  2 commits | ✅ good |
 ```
+
+Each `bad`/`good`/`midpoint` cell is the commit hash plus its **commit date and
+author** (the subject is omitted to keep rows compact).
 
 Each row reads in causal order: the **input range** (`bad`/`good`) → the
 **midpoint** git chose → the **status**. Watch the range funnel down.

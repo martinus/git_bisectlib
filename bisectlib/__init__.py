@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -702,8 +702,13 @@ def _write_sidecar() -> None:
     try:
         d = _commit_log_dir()
         d.mkdir(parents=True, exist_ok=True)
+        # `pending` is True for the per-step live writes (verdict not yet decided)
+        # and False once _finalize has locked in the outcome. The renderer uses it
+        # to show the in-flight commit's real verdict in the saved status.md, rather
+        # than leaving it stuck on `todo` (git only records the mark after we exit).
         data = {"sha": sha(), "outcome": _final["outcome"],
-                "exit_code": _final["code"], "steps": _steps}
+                "exit_code": _final["code"], "pending": not _finalized,
+                "steps": _steps}
         if "fixups" in _final:
             data["fixups"] = _final["fixups"]
         total = sum(s.get("duration_s") or 0 for s in _steps)

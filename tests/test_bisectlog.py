@@ -101,6 +101,44 @@ class TestBisectlog(unittest.TestCase):
         self.assertEqual(secs, 15 * 86400)
         self.assertEqual(bisectlog.fmt_date("2026-01-16T12:00:00Z"), "2026-01-16 12:00")
 
+    def test_cells_show_date_and_author_not_subject(self):
+        d, shas = make_repo(n=8, bug_at=5)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        has_bug = "BUG" in Path(d, "code.txt").read_text()
+        run(d, "git", "bisect", "bad" if has_bug else "good")
+        rep = bisectlog.build_report(d)
+        table = bisectlog.render_markdown(rep).split("## Details")[0]
+        self.assertIn("Tester", table)                       # author shown in cells
+        self.assertRegex(table, r"`[0-9a-f]{9}` 2026-01-\d\d")  # sha + commit date
+        self.assertNotIn("commit 8", table)                  # subject NOT in cells
+        run(d, "git", "bisect", "reset")
+
+    def test_in_progress_row_uses_finalized_sidecar_verdict(self):
+        import json
+        d, shas = make_repo(n=8, bug_at=5)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        head = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        logs = tempfile.mkdtemp(prefix="bl-logs-")
+        sc = Path(logs, head)
+        sc.mkdir()
+
+        def write(pending, outcome):
+            (sc / "eval.json").write_text(json.dumps(
+                {"sha": head, "outcome": outcome, "exit_code": 0,
+                 "pending": pending, "steps": []}))
+
+        # a finalized sidecar surfaces the real verdict on the in-flight row
+        write(pending=False, outcome="bad")
+        rep = bisectlog.build_report(d, logs_dir=logs)
+        row = next(r for r in rep.rows if r.midpoint == head)
+        self.assertEqual(row.status, "bad")
+        # while still pending, it stays `todo`
+        write(pending=True, outcome="good")
+        rep = bisectlog.build_report(d, logs_dir=logs)
+        row = next(r for r in rep.rows if r.midpoint == head)
+        self.assertEqual(row.status, "todo")
+        run(d, "git", "bisect", "reset")
+
     def test_no_bisect_returns_none(self):
         d, _ = make_repo(n=4, bug_at=3)
         self.assertIsNone(bisectlog.build_report(d))

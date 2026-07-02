@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 STATUS_ICON = {"good": "✅", "bad": "❌", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -103,6 +103,7 @@ class Sidecar:
     duration_s: Optional[float] = None
     steps: list[Step] = field(default_factory=list)
     fixups: list[dict] = field(default_factory=list)
+    pending: bool = True  # True until the recipe locked in a verdict (see engine)
 
 
 @dataclass
@@ -132,6 +133,8 @@ class Report:
     in_progress: bool
     head: Optional[str]
     subjects: dict[str, str] = field(default_factory=dict)
+    dates: dict[str, str] = field(default_factory=dict)
+    authors: dict[str, str] = field(default_factory=dict)
     note: str = ""
 
     def short(self, sha: Optional[str]) -> str:
@@ -139,6 +142,17 @@ class Report:
 
     def subject(self, sha: Optional[str]) -> str:
         return self.subjects.get(sha, "") if sha else ""
+
+    def author(self, sha: Optional[str]) -> str:
+        return self.authors.get(sha, "") if sha else ""
+
+    def commit_meta(self, sha: Optional[str]) -> str:
+        """`YYYY-MM-DD HH:MM, Author` for a commit cell — date then author, no subject."""
+        if not sha:
+            return ""
+        iso = self.dates.get(sha, "")
+        parts = [p for p in (fmt_date(iso) if iso else "", self.author(sha)) if p]
+        return ", ".join(parts)
 
 
 # --------------------------------------------------------------------- log parsing
@@ -281,6 +295,7 @@ def build_report(
     shas.discard(None)
     subjects = _commit_subjects(repo, shas)
     dates = _commit_dates(repo, shas)
+    authors = _commit_authors(repo, shas)
 
     # Fill range metrics + sidecars per row.
     for r in rows:
@@ -293,6 +308,15 @@ def build_report(
             r.span_seconds = _date_delta_seconds(r.good_date, r.bad_date)
         if logs_dir:
             r.sidecar = _load_sidecar(logs_dir, r.midpoint)
+
+    # The in-flight commit (HEAD) is a `todo` row because git hasn't recorded its
+    # mark yet — but if the recipe already finished and its sidecar carries a
+    # locked-in verdict, show that instead so the saved status.md reflects the
+    # completed evaluation rather than a perpetual `todo`.
+    if in_progress and rows and rows[-1].status == "todo":
+        sc = rows[-1].sidecar
+        if sc and not sc.pending and sc.outcome in ("good", "bad", "skip", "abort"):
+            rows[-1].status = sc.outcome
 
     note = ""
     if ready() and first_bad is None and not in_progress and n_remaining and n_remaining > 1:
@@ -319,6 +343,8 @@ def build_report(
         in_progress=in_progress,
         head=head,
         subjects=subjects,
+        dates=dates,
+        authors=authors,
         note=note,
     )
 
@@ -340,6 +366,15 @@ def _commit_dates(repo: str, shas) -> dict[str, str]:
         if not sha:
             continue
         out[sha] = git(repo, "show", "-s", "--format=%cI", sha, check=False)
+    return out
+
+
+def _commit_authors(repo: str, shas) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for sha in shas:
+        if not sha:
+            continue
+        out[sha] = git(repo, "show", "-s", "--format=%an", sha, check=False)
     return out
 
 
@@ -417,6 +452,7 @@ def _load_sidecar(logs_dir: str, sha: str) -> Optional[Sidecar]:
         duration_s=data.get("duration_s"),
         steps=steps,
         fixups=data.get("fixups", []),
+        pending=data.get("pending", True),
     )
 
 
@@ -475,8 +511,8 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
         return (STATUS_ICON.get(status, "") + " " if color else "") + status
 
     def cell(sha: str) -> str:
-        subj = rep.subject(sha).replace("|", "\\|")
-        return f"`{rep.short(sha)}`<br>{subj}" if subj else f"`{rep.short(sha)}`"
+        meta = rep.commit_meta(sha).replace("|", "\\|")
+        return f"`{rep.short(sha)}` {meta}" if meta else f"`{rep.short(sha)}`"
 
     lines: list[str] = []
     title = "Bisect report"
@@ -604,9 +640,9 @@ def render_html(
         short = _h(rep.short(sha))
         if base_url:
             short = f'<a href="{base_url}{_h(sha)}">{short}</a>'
-        subj = _h(rep.subject(sha))
+        meta = _h(rep.commit_meta(sha))
         return f'<span class="sha">{short}</span>' + (
-            f'<div class="subj">{subj}</div>' if subj else ""
+            f'<div class="subj">{meta}</div>' if meta else ""
         )
 
     head_extra = (
