@@ -476,11 +476,11 @@ Five columns:
 
 | Column | Content |
 |---|---|
-| **bad** | bad bound of the input range — **commit hash + date + author** |
 | **good** | good bound of the input range — **commit hash + date + author** |
+| **bad** | bad bound of the input range — **commit hash + date + author** |
 | **midpoint** | the commit picked to evaluate this step — **commit hash + date + author** |
-| **range** | text field describing the `good..bad` range: **start date, end date, duration, and commit count** |
-| **status** | evaluation result with an icon: `🕒 todo` / `✅ good` / `❌ bad` / `⏭️ skip` (`🛑 abort`) |
+| **range** | the `good..bad` range as **duration · commit count** (no dates) |
+| **status** | evaluation result with an icon: `🕒 todo` / `🟢 good` / `🔴 bad` / `⏭️ skip` (`🛑 abort`) |
 
 Each commit cell shows the short hash, its commit date, and author (the subject is
 omitted to keep rows compact). `status: 🕒 todo` marks the in-flight commit; once the
@@ -492,16 +492,16 @@ recipe locks in a verdict its sidecar records it (`pending: false`) so the saved
 **original range:** good v1.0 `a1b2c3` · bad HEAD `f6e5d4`
 **resume:** `git bisect start 5d6e7f 9a8b7c`   ← post-last-result range; copy-paste to restart
 
-| bad | good | midpoint | range | status |
-|-----|------|----------|-------|--------|
-| `f6e5d4`<br>Bump version | `a1b2c3`<br>Initial 1.0 tag | `9a8b7c`<br>Refactor parser | 2026-03-01 → 2026-05-23<br>83d 11h · 264 commits | ✅ good |
-| `f6e5d4`<br>Bump version | `9a8b7c`<br>Refactor parser | `5d6e7f`<br>Tune allocator | 2026-05-02 → 2026-06-12<br>41d 06h · 132 commits | ❌ bad |
-| `5d6e7f`<br>Tune allocator | `9a8b7c`<br>Refactor parser | `3c4d5e`<br>Add caching | 2026-05-02 → 2026-05-19<br>16d 19h · 64 commits | ⏭️ skip |
+| good | bad | midpoint | range | status |
+|------|-----|----------|-------|--------|
+| `a1b2c3` 2026-03-01 09:12, Ada | `f6e5d4` 2026-05-23 20:41, Bruno | `9a8b7c` 2026-04-15 11:06, Cleo | 83d 11h · 264 commits | 🟢 good |
+| `9a8b7c` 2026-04-15 11:06, Cleo | `f6e5d4` 2026-05-23 20:41, Bruno | `5d6e7f` 2026-05-04 14:20, Dev | 41d 06h · 132 commits | 🔴 bad |
+| `9a8b7c` 2026-04-15 11:06, Cleo | `5d6e7f` 2026-05-04 14:20, Dev | `3c4d5e` 2026-04-28 08:33, Eli | 16d 19h · 64 commits | ⏭️ skip |
 ```
 
-- The **range** cell is computed from the current `good..bad` pair: start/end =
-  good-commit and bad-commit dates, duration = their delta (e.g. `7d 25h 15m`), commit
-  count = `git rev-list --count good..bad`.
+- The **range** cell is computed from the current `good..bad` pair: duration = the
+  delta between the good and bad commit dates (e.g. `7d 25h 15m`), commit count =
+  `git rev-list --count good..bad`.
 - The result **updates the bounds for the *next* row**: a `good` raises `good` to the
   midpoint; a `bad` lowers `bad` to it; a `skip` leaves the bounds unchanged (git bisect
   just picks another midpoint inside the same range — see rows 2→3).

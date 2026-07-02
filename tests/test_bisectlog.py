@@ -139,6 +139,41 @@ class TestBisectlog(unittest.TestCase):
         self.assertEqual(row.status, "todo")
         run(d, "git", "bisect", "reset")
 
+    def test_first_eval_survives_failed_ancestry_check(self):
+        # Regression: on a shallow/grafted clone `merge-base --is-ancestor` can
+        # fail, which used to leave the range never "ready" so the first real
+        # evaluation was swallowed as an anchor (no row, no detail).
+        d, shas = make_repo(n=20, bug_at=18)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        m1 = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        has_bug = "BUG" in Path(d, "code.txt").read_text()
+        run(d, "git", "bisect", "bad" if has_bug else "good")
+        orig = bisectlog.is_ancestor
+        bisectlog.is_ancestor = lambda *a, **k: False  # emulate the failing check
+        try:
+            rep = bisectlog.build_report(d)
+        finally:
+            bisectlog.is_ancestor = orig
+        self.assertIn(m1, [r.midpoint for r in rep.rows])
+        run(d, "git", "bisect", "reset")
+
+    def test_render_format(self):
+        d, shas = make_repo(n=8, bug_at=5)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        has_bug = "BUG" in Path(d, "code.txt").read_text()
+        run(d, "git", "bisect", "bad" if has_bug else "good")
+        rep = bisectlog.build_report(d)
+        rep.rows[0].sidecar = bisectlog.Sidecar(
+            fixups=[{"kind": "replace", "path": "f",
+                     "detail": "OLD_VALUE → NEW_VALUE"}], steps=[])
+        md = bisectlog.render_markdown(rep, details=True)
+        self.assertIn("| good | bad | midpoint | range | status |", md)  # swapped
+        self.assertRegex(md, r"🟢|🔴")                     # new status icons
+        self.assertNotIn("✅", md)
+        self.assertNotIn("→ ", md.split("## Details")[0])  # no dates/arrows in range
+        self.assertIn("`OLD_VALUE → NEW_VALUE`", md)        # full fixup in backticks
+        run(d, "git", "bisect", "reset")
+
     def test_no_bisect_returns_none(self):
         d, _ = make_repo(n=4, bug_at=3)
         self.assertIsNone(bisectlog.build_report(d))

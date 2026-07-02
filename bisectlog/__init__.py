@@ -31,9 +31,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
-STATUS_ICON = {"good": "✅", "bad": "❌", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
+STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
 
 # --------------------------------------------------------------------------- git
@@ -205,6 +205,18 @@ def build_report(
     def ready() -> bool:
         return current_bad is not None and current_good is not None
 
+    def _anchor_good(sha: str) -> None:
+        # An *anchor* good establishes the good bound. Establish it directly the
+        # first time (do NOT gate on ancestry — a shallow clone or grafted history
+        # can make `merge-base --is-ancestor` fail, which would otherwise leave the
+        # range never "ready" and cause the first real evaluation to be swallowed
+        # as another anchor). Additional anchor goods tighten via set_good.
+        nonlocal current_good
+        if current_good is None:
+            current_good = sha
+        else:
+            set_good(sha)
+
     def set_good(sha: str) -> None:
         nonlocal current_good
         # Tighten the good bound to the newest good that is an ancestor of bad.
@@ -234,7 +246,7 @@ def build_report(
                     current_bad = orig_bad = shas[0]
                 for g in shas[1:]:
                     orig_goods.append(g)
-                    set_good(g)
+                    _anchor_good(g)
             continue
 
         term = verb
@@ -251,7 +263,7 @@ def build_report(
         elif term == good_term:
             if not ready():  # anchor
                 orig_goods.append(sha)
-                set_good(sha)
+                _anchor_good(sha)
             else:            # evaluation
                 add_row(sha, "good")
                 set_good(sha)
@@ -537,19 +549,16 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
         lines.append(f"> ⚠️ {rep.note}")
     lines.append("")
 
-    lines.append("| bad | good | midpoint | range | status |")
-    lines.append("|-----|------|----------|-------|--------|")
+    lines.append("| good | bad | midpoint | range | status |")
+    lines.append("|------|-----|----------|-------|--------|")
     for r in rep.rows:
-        rng = (
-            f"{fmt_date(r.good_date)} → {fmt_date(r.bad_date)}<br>"
-            f"{fmt_duration(r.span_seconds)} · {r.n_commits} commits"
-        )
+        rng = f"{fmt_duration(r.span_seconds)} · {r.n_commits} commits"
         status = icon(r.status)
         extra = _step_summary(r.sidecar)
         if extra:
             status += f" · {extra}"
         lines.append(
-            f"| {cell(r.bad)} | {cell(r.good)} | {cell(r.midpoint)} | {rng} | {status} |"
+            f"| {cell(r.good)} | {cell(r.bad)} | {cell(r.midpoint)} | {rng} | {status} |"
         )
     lines.append("")
 
@@ -565,7 +574,7 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
                 )
                 if r.sidecar.fixups:
                     fx = ", ".join(
-                        f"{f.get('kind')}: {f.get('detail', f.get('path',''))}"
+                        f"{f.get('kind')}: `{f.get('detail', f.get('path',''))}`"
                         for f in r.sidecar.fixups
                     )
                     lines.append(f"- fixups: {fx}")
@@ -679,11 +688,10 @@ def render_html(
         out.append(f"<div class='note'>⚠️ {_h(rep.note)}</div>")
 
     out.append("<table><thead><tr>"
-               "<th>bad</th><th>good</th><th>midpoint</th>"
+               "<th>good</th><th>bad</th><th>midpoint</th>"
                "<th>range</th><th>status</th></tr></thead><tbody>")
     for r in rep.rows:
         rng = (
-            f"{_h(fmt_date(r.good_date))} → {_h(fmt_date(r.bad_date))}<br>"
             f"<span class='muted'>{fmt_duration(r.span_seconds)} · {r.n_commits} commits</span>"
         )
         badge = f"<span class='badge {r.status}'>{STATUS_ICON.get(r.status,'')} {r.status}</span>"
@@ -692,7 +700,7 @@ def render_html(
         if details and r.sidecar:
             status_cell += _render_detail_html(r)
         out.append(
-            f"<tr><td>{sha_html(r.bad)}</td><td>{sha_html(r.good)}</td>"
+            f"<tr><td>{sha_html(r.good)}</td><td>{sha_html(r.bad)}</td>"
             f"<td>{sha_html(r.midpoint)}</td><td>{rng}</td><td>{status_cell}</td></tr>"
         )
     out.append("</tbody></table>")
@@ -727,8 +735,10 @@ def _render_detail_html(r: Row) -> str:
         )
     parts.append("</tbody></table>")
     if sc.fixups:
-        fx = ", ".join(_h(f"{f.get('kind')}: {f.get('detail', f.get('path',''))}")
-                       for f in sc.fixups)
+        fx = ", ".join(
+            f"{_h(f.get('kind'))}: <code>{_h(f.get('detail', f.get('path', '')))}</code>"
+            for f in sc.fixups
+        )
         parts.append(f"<div class='muted'>fixups: {fx}</div>")
     parts.append("</details>")
     return "".join(parts)
@@ -777,21 +787,21 @@ def render_terminal(rep: Report, color: bool = True, width: Optional[int] = None
     subj_w = max(12, width - prefix)
 
     # column header (dim)
-    hdr = (f"  {'':<{sw}} {'bad':<{_SHA}} {'good':<{_SHA}} {'midpoint':<{_SHA}} "
+    hdr = (f"  {'':<{sw}} {'good':<{_SHA}} {'bad':<{_SHA}} {'midpoint':<{_SHA}} "
            f"{'cmts':>{_NW}}  subject")
     out.append(c(hdr, "dim"))
 
     for r in rep.rows:
         mark = c(_MARK.get(r.status, " "), r.status)
         status = c(f"{r.status:<{sw}}", r.status)
-        bad = c(f"{rep.short(r.bad):<{_SHA}}", "bad")
         good = c(f"{rep.short(r.good):<{_SHA}}", "good")
+        bad = c(f"{rep.short(r.bad):<{_SHA}}", "bad")
         mid = c(f"{rep.short(r.midpoint):<{_SHA}}", "sha")
         n = c(f"{r.n_commits:>{_NW}}", "dim")
         subj = rep.subject(r.midpoint)
         if len(subj) > subj_w:
             subj = subj[:subj_w - 1] + "…"
-        out.append(f"{mark} {status} {bad} {good} {mid} {n}  {subj}")
+        out.append(f"{mark} {status} {good} {bad} {mid} {n}  {subj}")
     return "\n".join(out) + "\n"
 
 
