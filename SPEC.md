@@ -499,9 +499,11 @@ recipe locks in a verdict its sidecar records it (`pending: false`) so the saved
 | `9a8b7c` 2026-04-15 11:06, Cleo | `5d6e7f` 2026-05-04 14:20, Dev | `3c4d5e` 2026-04-28 08:33, Eli | 16d 19h · 64 commits | ⏭️ skip |
 ```
 
-- The **range** cell is computed from the current `good..bad` pair: duration = the
-  delta between the good and bad commit dates (e.g. `7d 25h 15m`), commit count =
-  `git rev-list --count good..bad`.
+- The **range** cell is computed from the current bounds: duration = the delta
+  between the good and bad commit dates (e.g. `7d 25h 15m`), commit count = the
+  candidate commits git still has to consider, `git rev-list --count <bad> --not
+  <every good so far>` (excluding ancestors of **all** goods, not just the latest —
+  in a merge DAG the goods can diverge, so counting only `latest_good..bad` overcounts).
 - The result **updates the bounds for the *next* row**: a `good` raises `good` to the
   midpoint; a `bad` lowers `bad` to it; a `skip` leaves the bounds unchanged (git bisect
   just picks another midpoint inside the same range — see rows 2→3).

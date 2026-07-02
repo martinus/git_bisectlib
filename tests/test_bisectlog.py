@@ -101,6 +101,46 @@ class TestBisectlog(unittest.TestCase):
         self.assertEqual(secs, 15 * 86400)
         self.assertEqual(bisectlog.fmt_date("2026-01-16T12:00:00Z"), "2026-01-16 12:00")
 
+    def test_range_count_excludes_all_goods(self):
+        # In a merge DAG, git's candidate range excludes ancestors of EVERY good,
+        # not just the latest. With a good anchor on a side branch that diverges
+        # from the mainline midpoint, counting only `latest_good..bad` overcounts.
+        d = tempfile.mkdtemp(prefix="bisectlog-dag-")
+        run(d, "git", "init", "-q")
+        run(d, "git", "config", "user.email", "t@t.t")
+        run(d, "git", "config", "user.name", "T")
+
+        def mk(name):
+            Path(d, f"f_{name}").write_text(name)
+            run(d, "git", "add", "-A")
+            run(d, "git", "commit", "-qm", name)
+
+        mk("root")
+        main = run(d, "git", "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        run(d, "git", "branch", "side")
+        for i in range(1, 11):
+            mk(f"m{i}")
+        run(d, "git", "checkout", "-q", "side")
+        for i in range(1, 4):
+            mk(f"s{i}")
+        s3 = run(d, "git", "rev-parse", "HEAD").stdout.strip()  # good on side branch
+        run(d, "git", "checkout", "-q", main)
+        run(d, "git", "merge", "-q", "--no-ff", "-m", "merge", s3)
+        for i in range(11, 21):
+            mk(f"m{i}")
+        bad = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        firstmid = run(d, "git", "rev-list", "--bisect", bad, "--not", s3).stdout.strip()
+
+        run(d, "git", "bisect", "start", bad, s3)
+        run(d, "git", "bisect", "good", firstmid)  # firstmid diverges from s3
+        rep = bisectlog.build_report(d)
+        todo = [r for r in rep.rows if r.status == "todo"][0]
+        both = int(run(d, "git", "rev-list", "--count", bad, "--not", firstmid, s3).stdout)
+        single = int(run(d, "git", "rev-list", "--count", f"{firstmid}..{bad}").stdout)
+        self.assertEqual(todo.n_commits, both)     # excludes BOTH goods
+        self.assertLess(both, single)              # the divergent good really matters
+        run(d, "git", "bisect", "reset")
+
     def test_good_bound_advances_without_ancestry(self):
         # Regression: in a merge DAG (or shallow clone) the newly-good commit need
         # not be a topological descendant of the prior good, so the old ancestry

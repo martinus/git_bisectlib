@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -112,11 +112,12 @@ class Row:
     good: str         # input-range good bound (sha) before this evaluation
     midpoint: str     # the commit evaluated this step
     status: str       # good | bad | skip | todo
-    n_commits: int = 0          # commits in good..bad at this step
+    n_commits: int = 0          # candidate commits still in range at this step
     span_seconds: int = 0       # wall span between good and bad commit dates
     good_date: str = ""
     bad_date: str = ""
     sidecar: Optional[Sidecar] = None
+    goods: list = field(default_factory=list)  # ALL goods bounding the range here
 
 
 @dataclass
@@ -199,11 +200,16 @@ def build_report(
     orig_goods: list[str] = []
     current_bad: Optional[str] = None
     current_good: Optional[str] = None
+    active_goods: list[str] = []   # every good marked so far (defines the range)
     rows: list[Row] = []
     seen_midpoints: set[str] = set()
 
     def ready() -> bool:
         return current_bad is not None and current_good is not None
+
+    def _add_good(sha: str) -> None:
+        if sha not in active_goods:
+            active_goods.append(sha)
 
     def _anchor_good(sha: str) -> None:
         # An *anchor* good establishes the good bound. Establish it directly the
@@ -216,6 +222,7 @@ def build_report(
             current_good = sha
         else:
             set_good(sha)
+        _add_good(sha)
 
     def set_good(sha: str) -> None:
         nonlocal current_good
@@ -232,6 +239,7 @@ def build_report(
                 good=current_good,
                 midpoint=midpoint,
                 status=status,
+                goods=list(active_goods),
             )
         )
         seen_midpoints.add(midpoint)
@@ -273,6 +281,7 @@ def build_report(
                 # good, and on shallow clones the check can't be verified, either
                 # of which would otherwise freeze the good bound and the range.
                 current_good = sha
+                _add_good(sha)   # excluded from the range for subsequent rows
         elif term == "skip":
             if ready():
                 add_row(sha, "skip")
@@ -280,13 +289,19 @@ def build_report(
 
     head = git(repo, "rev-parse", "HEAD", check=False) or None
 
-    # Determine the first-bad answer / progress.
+    # Determine the first-bad answer / progress. The candidate set is commits
+    # reachable from bad but from NONE of the goods (git excludes ancestors of
+    # every good, not just the latest — crucial in a DAG where goods diverge).
+    def _range_count(bad: str, goods: list) -> int:
+        goods = [g for g in goods if g]
+        if not goods:
+            return 0
+        return int(git(repo, "rev-list", "--count", bad, "--not", *goods) or 0)
+
     first_bad: Optional[str] = None
     n_remaining = None
     if ready():
-        n_remaining = int(
-            git(repo, "rev-list", "--count", f"{current_good}..{current_bad}")
-        )
+        n_remaining = _range_count(current_bad, active_goods)
         if n_remaining <= 1:
             first_bad = current_bad
 
@@ -326,10 +341,11 @@ def build_report(
 
     # Fill range metrics + sidecars per row.
     for r in rows:
+        if r.bad and r.goods:
+            r.n_commits = _range_count(r.bad, r.goods)
+        elif r.good and r.bad:  # fallback (shouldn't happen once ready)
+            r.n_commits = int(git(repo, "rev-list", "--count", f"{r.good}..{r.bad}") or 0)
         if r.good and r.bad:
-            r.n_commits = int(
-                git(repo, "rev-list", "--count", f"{r.good}..{r.bad}")
-            )
             r.good_date = dates.get(r.good, "")
             r.bad_date = dates.get(r.bad, "")
             r.span_seconds = _date_delta_seconds(r.good_date, r.bad_date)

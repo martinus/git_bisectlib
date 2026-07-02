@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bisectlib"
-version = "0.6.0"
+version = "0.7.0"
 description = "Automated git bisect: render bisect sessions (bisectlog) and write bisect recipes (bisectlib)."
 readme = "README.md"
 requires-python = ">=3.10"
