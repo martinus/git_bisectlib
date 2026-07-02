@@ -288,9 +288,9 @@ truthy for direct `if` use.
 ### 4.7 `configure` — optional, zero-config defaults otherwise
 
 ```python
-configure(status_md=None,   # default: ${XDG_CACHE_HOME:-~/.cache}/bisectlib/<bisect-id>.md
+configure(status_md=None,   # default: ${XDG_CACHE_HOME:-~/.cache}/bisectlib/<session>/status.md
                             # (temp/cache dir — repo untouched). Set a path to override.
-          logs=None,        # default: alongside status_md, <bisect-id>/<sha>/
+          logs=None,        # default: the same <session>/ dir, per-commit logs in <session>/<sha>/
           clean="reset",    # "reset" (keep build/) | "clean" (git clean -fdx)
           color=None)       # None=auto (tty & !NO_COLOR) | True | False
 ```
@@ -440,10 +440,14 @@ the whole session, so both stay stable across abort→resume.
 Since the report is a stateless render, the filename only needs to **locate** the file —
 there's no continuity to preserve.
 
-- **Stored in a temp/cache dir so the repo is never modified:**
-  `${XDG_CACHE_HOME:-~/.cache}/bisectlib/<bisect-id>.md` (per-commit logs alongside under
-  `<bisect-id>/<sha>/`). The path is **printed to the terminal at startup** so you can
-  `watch` it. `configure(status_md=…)` overrides (e.g. to drop it into the repo).
+- **Stored in a temp/cache dir so the repo is never modified:** one directory per
+  session, `${XDG_CACHE_HOME:-~/.cache}/bisectlib/<session>/`, holding `status.md` and the
+  per-commit logs under `<session>/<sha>/`. `configure(status_md=…)` overrides (e.g. to drop
+  it into the repo).
+- **`<session>` = `<YYYY-MM-DD_HHMMSS>_<good>..<bad>_<bisect-id>`** — a session-start
+  timestamp and the short `good..bad` range for at-a-glance identification, suffixed with the
+  stable `<bisect-id>`. The first process to evaluate a commit creates the directory; later
+  commits reuse it (matched on the id suffix) so the name stays fixed for the whole session.
 - **`<bisect-id>` = short hash of `worktree_path + original anchors`** (anchors from
   `original_anchors()`, i.e. from `git bisect log`). Worktree path keeps parallel
   git-worktrees apart; the anchor component keeps successive bisects in the same worktree in
@@ -566,17 +570,18 @@ about a commit — never approximated.
 
 The richer detail (commands, per-step exit codes, exact timings, flaky ratio, benchmark
 timing, fixups) comes **solely from each commit's `eval.json` sidecar**, which the engine
-writes into the per-commit log dir (`<cache>/bisectlib/<bisect-id>/<sha>/`) next to the
-captured `*.log` files:
+writes into the per-commit log dir (`<cache>/bisectlib/<session>/<sha>/`) next to the
+captured `*.log` files (named `NN-<verb>-<slug-of-command>.log`, e.g.
+`01-run-cmake-b-build.log`):
 
 ```json
 {
   "sha": "9a8b7c…", "outcome": "good", "exit_code": 0, "duration_s": 192.4,
   "steps": [
-    {"verb":"run","cmd":"cmake -B build","code":0,"duration_s":4.1,"log":"01-run.log"},
-    {"verb":"run","cmd":"cmake --build build -j","code":0,"duration_s":151.2,"log":"02-run.log"},
+    {"verb":"run","cmd":"cmake -B build","code":0,"duration_s":4.1,"log":"01-run-cmake-b-build.log"},
+    {"verb":"run","cmd":"cmake --build build -j","code":0,"duration_s":151.2,"log":"02-run-cmake-build-build-j.log"},
     {"verb":"test","cmd":"ctest -R foo","outcome":"good","attempts":5,"executed":5,"passes":2,"min_passes":2,
-     "durations_s":[1.7,1.9,2.4,1.6,1.8],"log":"03-test.log"}
+     "durations_s":[1.7,1.9,2.4,1.6,1.8],"log":"03-test-ctest-r-foo.log"}
   ],
   "fixups": [{"kind":"replace","path":"CMakeLists.txt","detail":"c++14→c++17"}]
 }
@@ -673,9 +678,10 @@ test("./run_tests")
 
 ### Packaging
 - Standalone repo / pip package (no dependency on the keto-calculator repos — unrelated).
-- Two modules: **`bisectlog.py`** (the renderer — single file, **stdlib only**, also the
-  `bisectlog` / `git bisectlog` CLI) and **`bisectlib.py`** (the recipe engine, imports
-  `bisectlog`). Splitting further can wait.
+- Two packages: **`bisectlog`** (the renderer — **stdlib only**, also the
+  `bisectlog` / `git bisectlog` CLI) and **`bisectlib`** (the recipe engine, imports
+  `bisectlog`). Each ships a `py.typed` marker so installed usage is fully typed.
+  Splitting further can wait.
 - Python 3.10+ (uses `re.Pattern`, `match`/`Enum`, etc.).
 
 ---

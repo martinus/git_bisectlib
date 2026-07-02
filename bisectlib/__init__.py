@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -67,8 +67,8 @@ _OUTCOME_NAME = {GOOD: "good", BAD: "bad", SKIP: "skip", ABORT: "abort"}
 # ----------------------------------------------------------------- configuration
 @dataclass
 class _Config:
-    status_md: Optional[str] = None     # default: <cache>/bisectlib/<id>.md
-    logs: Optional[str] = None          # default: <cache>/bisectlib/<id>/
+    status_md: Optional[str] = None     # default: <cache>/bisectlib/<session>/status.md
+    logs: Optional[str] = None          # default: <cache>/bisectlib/<session>/
     clean: str = "reset"                # "reset" | "clean"
     color: Optional[bool] = None        # None=auto
     cwd: Optional[str] = None           # default working dir for commands (repo root)
@@ -295,14 +295,17 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
 
 
 # --------------------------------------------------------------- log directory
-def _bisect_id() -> str:
+def _bisect_anchors() -> tuple[str, Optional[str], Optional[str]]:
+    """(repo_top, first_bad, first_good) — the ORIGINAL anchors of this session.
+
+    These are fixed for the whole bisect. `git bisect log` grows with every
+    evaluation, so keying on anything else would change the identity each commit
+    (breaking the first-run marker and scattering logs across directories).
+    """
     try:
         top = _toplevel()
     except RuntimeError:
         top = os.getcwd()
-    # Key on the ORIGINAL anchors only (first bad + first good) — these are fixed
-    # for the whole session. `git bisect log` grows with every evaluation, so
-    # hashing the full log would change the id each commit (breaking the marker).
     bad0 = good0 = None
     for line in _git("bisect", "log", check=False).splitlines():
         if not line.startswith("git bisect "):
@@ -319,9 +322,13 @@ def _bisect_id() -> str:
             bad0 = bad0 or revs[0]
         elif verb == "good" and revs:
             good0 = good0 or revs[0]
+    return top, bad0, good0
+
+
+def _bisect_id() -> str:
+    top, bad0, good0 = _bisect_anchors()
     anchors = f"{bad0 or ''}\n{good0 or ''}"
-    h = hashlib.sha1((top + "\n" + anchors).encode()).hexdigest()[:12]
-    return h
+    return hashlib.sha1((top + "\n" + anchors).encode()).hexdigest()[:12]
 
 
 def _cache_base() -> Path:
@@ -329,16 +336,44 @@ def _cache_base() -> Path:
     return Path(cache) / "bisectlib"
 
 
+_resolved_logs_dir: Optional[Path] = None
+
+
+def _session_dirname() -> str:
+    """A human-readable, stable directory name for this bisect session.
+
+    ``<YYYY-MM-DD_HHMMSS>_<good>..<bad>_<id>`` — a timestamp for sorting/telling
+    sessions apart at a glance, the short ``good..bad`` range so you can see what
+    was bisected, and the stable 12-char id as a collision-proof suffix (the id
+    is what we glob on to keep the name fixed for the whole session).
+    """
+    _, bad0, good0 = _bisect_anchors()
+    bid = _bisect_id()
+    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    if good0 and bad0:
+        return f"{stamp}_{good0[:9]}..{bad0[:9]}_{bid}"
+    return f"{stamp}_{bid}"
+
+
 def _logs_dir() -> Path:
+    global _resolved_logs_dir
     if _cfg.logs:
         return Path(_cfg.logs)
-    return _cache_base() / _bisect_id()
+    if _resolved_logs_dir is not None:
+        return _resolved_logs_dir
+    base = _cache_base()
+    bid = _bisect_id()
+    # Reuse an existing session dir for this id so the name (and its timestamp)
+    # stays fixed across every commit evaluated; only the first process creates it.
+    existing = sorted(base.glob(f"*_{bid}"))
+    _resolved_logs_dir = existing[0] if existing else base / _session_dirname()
+    return _resolved_logs_dir
 
 
 def _status_md_path() -> Path:
     if _cfg.status_md:
         return Path(_cfg.status_md)
-    return _cache_base() / f"{_bisect_id()}.md"
+    return _logs_dir() / "status.md"
 
 
 def _commit_log_dir() -> Path:
@@ -390,6 +425,23 @@ def abort(msg: str = "") -> "NoReturn":  # type: ignore[name-defined]
 
 
 # -------------------------------------------------------------------- run/test
+def _slug(cmd: str, maxlen: int = 40) -> str:
+    """A short, filesystem-safe label derived from a command, for log filenames.
+
+    The program name is reduced to its basename (``./gradlew`` -> ``gradlew``,
+    ``/usr/bin/make`` -> ``make``) and everything is lowercased with runs of
+    non-alphanumerics collapsed to single dashes, e.g.
+    ``./gradlew :nativesdk:fetchAgent`` -> ``gradlew-nativesdk-fetchagent``.
+    """
+    tokens = cmd.strip().split()
+    if tokens:
+        tokens[0] = os.path.basename(tokens[0])
+    s = re.sub(r"[^a-z0-9]+", "-", " ".join(tokens).lower()).strip("-")
+    if len(s) > maxlen:
+        s = s[:maxlen].rstrip("-")
+    return s or "cmd"
+
+
 def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = None,
         on_timeout: str = "abort", cwd: Optional[str] = None,
         name: Optional[str] = None) -> Result:
@@ -403,10 +455,11 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
     honoured); defaults to the repo root or ``configure(cwd=…)``.
     """
     _echo_start("run", cmd)
-    res = _exec(cmd, timeout, _commit_log_dir() / f"{len(_steps)+1:02d}-run.log", cwd)
+    log_name = f"{len(_steps)+1:02d}-run-{_slug(cmd)}.log"
+    res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
     timed_out = res.code == -1
     ok = res.code == 0
-    _record_step("run", cmd, res, ok)
+    _record_step("run", cmd, res, ok, log=log_name)
     if timed_out:
         label = on_timeout
         _echo_result("run", cmd, False, res.seconds, label)
@@ -464,12 +517,14 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
     passes = 0
     executed = 0
     last: Optional[Result] = None
+    idx, slug = len(_steps) + 1, _slug(cmd)
+    log_name = f"{idx:02d}-test-{slug}.log"
     for i in range(warmup + attempts):
         res = _exec(cmd, timeout,
-                    _commit_log_dir() / f"{len(_steps)+1:02d}-test-{i+1}.log", cwd)
+                    _commit_log_dir() / f"{idx:02d}-test-{slug}-{i+1}.log", cwd)
         last = res
         if res.code == -1:  # timeout
-            _record_step("test", cmd, res, False,
+            _record_step("test", cmd, res, False, log=log_name,
                          extra={"attempts": attempts, "passes": passes,
                                 "timeout": True})
             _echo_result("test", cmd, False, res.seconds, on_timeout)
@@ -492,7 +547,7 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
     good = passes >= min_passes
     extra = {"attempts": attempts, "executed": executed, "passes": passes,
              "min_passes": min_passes, "durations_s": [round(d, 4) for d in durations]}
-    _record_step("test", cmd, last, good, extra=extra,
+    _record_step("test", cmd, last, good, log=log_name, extra=extra,
                  outcome="good" if good else "bad")
 
     fastest = f" · min {min(durations):.3g}s" if durations else ""
@@ -508,8 +563,9 @@ def check(cmd: str, *, timeout: Optional[float] = None,
           cwd: Optional[str] = None) -> Result:
     """Run once and return the Result. NEVER exits the process."""
     _echo_start("check", cmd)
-    res = _exec(cmd, timeout, _commit_log_dir() / f"{len(_steps)+1:02d}-check.log", cwd)
-    _record_step("check", cmd, res, res.ok)
+    log_name = f"{len(_steps)+1:02d}-check-{_slug(cmd)}.log"
+    res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
+    _record_step("check", cmd, res, res.ok, log=log_name)
     _echo_result("check", cmd, res.ok, res.seconds, "ok" if res.ok else "fail")
     return res
 
@@ -541,11 +597,12 @@ def _first_run_marker() -> Path:
     return _logs_dir() / "first-run-done"
 
 
-def _record_step(verb, cmd, res: Optional[Result], ok, extra=None, outcome=None):
+def _record_step(verb, cmd, res: Optional[Result], ok, extra=None, outcome=None,
+                 log=None):
     step = {"verb": verb, "cmd": cmd,
             "code": (res.code if res else None),
             "duration_s": round(res.seconds, 4) if res else None,
-            "log": None}
+            "log": log}
     if outcome:
         step["outcome"] = outcome
     if extra:

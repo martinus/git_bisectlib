@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 STATUS_ICON = {"good": "✅", "bad": "❌", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -343,11 +343,21 @@ def _commit_dates(repo: str, shas) -> dict[str, str]:
     return out
 
 
+def _parse_iso(s: str) -> datetime:
+    """Parse an ISO-8601 timestamp, tolerating a trailing ``Z``.
+
+    Recent git emits UTC as ``…T12:00:00Z`` for ``%cI``; Python 3.10's
+    ``datetime.fromisoformat`` rejects the ``Z`` suffix (3.11+ accepts it), so
+    normalise it to an explicit ``+00:00`` offset first.
+    """
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s)
+
+
 def _date_delta_seconds(a: str, b: str) -> int:
     try:
-        da = datetime.fromisoformat(a)
-        db = datetime.fromisoformat(b)
-        return int(abs((db - da).total_seconds()))
+        return int(abs((_parse_iso(b) - _parse_iso(a)).total_seconds()))
     except (ValueError, TypeError):
         return 0
 
@@ -367,7 +377,7 @@ def fmt_duration(seconds: int) -> str:
 
 def fmt_date(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return _parse_iso(iso).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return iso or "—"
 

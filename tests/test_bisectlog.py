@@ -93,6 +93,14 @@ class TestBisectlog(unittest.TestCase):
         self.assertGreater(first.span_seconds, 0)
         run(d, "git", "bisect", "reset")
 
+    def test_date_delta_tolerates_z_suffix(self):
+        # newer git emits UTC as `…T12:00:00Z` for %cI; Python 3.10's
+        # fromisoformat rejects the Z suffix, which silently zeroed spans.
+        secs = bisectlog._date_delta_seconds(
+            "2026-01-01T12:00:00Z", "2026-01-16T12:00:00Z")
+        self.assertEqual(secs, 15 * 86400)
+        self.assertEqual(bisectlog.fmt_date("2026-01-16T12:00:00Z"), "2026-01-16 12:00")
+
     def test_no_bisect_returns_none(self):
         d, _ = make_repo(n=4, bug_at=3)
         self.assertIsNone(bisectlog.build_report(d))
