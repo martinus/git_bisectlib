@@ -345,19 +345,20 @@ _ID_LEN = 8  # short-id length used in the session dir name (and glob key)
 def _session_dirname() -> str:
     """A human-readable, stable directory name for this bisect session.
 
-    ``<YYYY-MM-DD>_<HHMM>_<good>-<bad>_<id>`` — a date/time to tell sessions
+    ``<YYYY-MM-DD>_<HH-MM>__<good>-<bad>__<id>`` — a date/time to tell sessions
     apart and spot the latest at a glance, the short ``good-bad`` range so you
     can see what was bisected, and a short id as a collision-proof suffix (the id
-    is what we glob on to keep the name fixed for the whole session). Kept lean:
-    7-char shas, minute-precision time, and an 8-char id, e.g.
-    ``2026-07-02_0830_ac6590587-720acb61c`` → ``2026-07-02_0830_ac65905-720acb6_49fd6cd5``.
+    is what we glob on to keep the name fixed for the whole session). Double
+    underscores separate the three groups; kept lean with 7-char shas,
+    minute-precision time, and an 8-char id, e.g.
+    ``2026-07-02_08-30__ac65905-720acb6__49fd6cd5``.
     """
     _, bad0, good0 = _bisect_anchors()
     bid = _bisect_id()[:_ID_LEN]
-    stamp = time.strftime("%Y-%m-%d_%H%M")
+    stamp = time.strftime("%Y-%m-%d_%H-%M")
     if good0 and bad0:
-        return f"{stamp}_{good0[:7]}-{bad0[:7]}_{bid}"
-    return f"{stamp}_{bid}"
+        return f"{stamp}__{good0[:7]}-{bad0[:7]}__{bid}"
+    return f"{stamp}__{bid}"
 
 
 def _logs_dir() -> Path:
@@ -370,7 +371,7 @@ def _logs_dir() -> Path:
     bid = _bisect_id()[:_ID_LEN]
     # Reuse an existing session dir for this id so the name (and its timestamp)
     # stays fixed across every commit evaluated; only the first process creates it.
-    existing = sorted(base.glob(f"*_{bid}"))
+    existing = sorted(base.glob(f"*__{bid}"))
     _resolved_logs_dir = existing[0] if existing else base / _session_dirname()
     return _resolved_logs_dir
 

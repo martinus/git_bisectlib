@@ -447,12 +447,13 @@ there's no continuity to preserve.
 - **`status.md` is re-rendered after every step** (not just at the end), and the current
   commit's `eval.json` is flushed alongside it, so the file is a live view of the in-flight
   commit's progress — `bisectlog --watch` it or tail it while a long build/test runs.
-- **`<session>` = `<YYYY-MM-DD>_<HHMM>_<good>-<bad>_<bisect-id>`** — a session-start
+- **`<session>` = `<YYYY-MM-DD>_<HH-MM>__<good>-<bad>__<bisect-id>`** — a session-start
   date/time and the short `good-bad` range for at-a-glance identification, suffixed with the
-  stable short `<bisect-id>`. Kept lean (7-char shas, minute-precision time, 8-char id), e.g.
-  `2026-07-02_0830_ac65905-720acb6_49fd6cd5`. The first process to evaluate a commit creates
-  the directory; later commits reuse it (matched on the id suffix) so the name stays fixed for
-  the whole session — the timestamp records when it began.
+  stable short `<bisect-id>` (double underscores separate the three groups). Kept lean (7-char
+  shas, minute-precision time, 8-char id), e.g. `2026-07-02_08-30__ac65905-720acb6__49fd6cd5`.
+  The first process to evaluate a commit creates the directory; later commits reuse it (matched
+  on the id suffix) so the name stays fixed for the whole session — the timestamp records when
+  it began.
 - **`<bisect-id>` = short hash of `worktree_path + original anchors`** (anchors from
   `original_anchors()`, i.e. from `git bisect log`). Worktree path keeps parallel
   git-worktrees apart; the anchor component keeps successive bisects in the same worktree in
