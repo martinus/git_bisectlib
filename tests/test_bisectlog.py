@@ -219,6 +219,31 @@ class TestBisectlog(unittest.TestCase):
         self.assertIn(f"[run]({head}/01-run-make.log)", md)   # step cell is a link
         run(d, "git", "bisect", "reset")
 
+    def test_running_step_shown_before_command_finishes(self):
+        import json
+        d, shas = make_repo(n=8, bug_at=5)
+        run(d, "git", "bisect", "start", shas[-1], shas[0])
+        head = run(d, "git", "rev-parse", "HEAD").stdout.strip()
+        logs = tempfile.mkdtemp(prefix="bl-logs-")
+        sc = Path(logs, head)
+        sc.mkdir()
+        # a provisional step written by _begin_step: no exit code yet == running
+        (sc / "eval.json").write_text(json.dumps(
+            {"sha": head, "outcome": "good", "exit_code": 0, "pending": True,
+             "steps": [{"verb": "run", "cmd": "make -j", "code": None,
+                        "duration_s": None, "log": "01-run-make.log",
+                        "running": True}]}))
+        rep = bisectlog.build_report(d, logs_dir=logs)
+        md = bisectlog.render_markdown(rep, details=True)
+        # top-level table names the in-flight command; details link its live log
+        self.assertIn("running `make -j`", md)
+        self.assertIn(f"[run]({head}/01-run-make.log)", md)
+        self.assertIn("⏳", md)
+        html = bisectlog.render_html(rep, details=True)
+        self.assertIn("running", html)
+        self.assertIn(f"{head}/01-run-make.log", html)
+        run(d, "git", "bisect", "reset")
+
     def test_in_progress_row_uses_finalized_sidecar_verdict(self):
         import json
         d, shas = make_repo(n=8, bug_at=5)

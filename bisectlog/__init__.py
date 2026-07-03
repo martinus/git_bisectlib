@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -500,9 +500,17 @@ def _load_sidecar(logs_dir: str, sha: str) -> Optional[Sidecar]:
 
 
 def _step_summary(sc: Optional[Sidecar]) -> str:
-    """Inline recorded detail for a row's status cell, e.g. '2/5 · 1.8s'."""
+    """Inline recorded detail for a row's status cell, e.g. '2/5 · 1.8s'.
+
+    While a command is executing, its step carries no exit code yet; show what is
+    running right now so the top-level table names the in-flight command at a
+    glance (the Details section links its live log)."""
     if not sc:
         return ""
+    for s in sc.steps:
+        if s.code is None:
+            cmd = s.cmd if len(s.cmd) <= 60 else s.cmd[:59] + "…"
+            return f"⏳ running `{cmd}`"
     bits = []
     for s in sc.steps:
         if s.verb != "test":
@@ -623,10 +631,14 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
                 lines.append("| step | cmd | exit | time |")
                 lines.append("|------|-----|------|------|")
                 for s in r.sidecar.steps:
-                    dur = f"{s.duration_s:.3g}s" if s.duration_s is not None else ""
-                    code = "" if s.code is None else str(s.code)
+                    # a step with no exit code yet is running right now
+                    running = s.code is None
+                    dur = ("running…" if running else
+                           (f"{s.duration_s:.3g}s" if s.duration_s is not None else ""))
+                    code = "⏳" if running else str(s.code)
                     # link the step to its captured log file (relative to status.md,
-                    # which sits alongside the per-commit <sha>/ log dirs)
+                    # which sits alongside the per-commit <sha>/ log dirs); the log
+                    # streams live, so the link is watchable while the step runs
                     step = f"[{s.verb}]({r.midpoint}/{s.log})" if s.log else s.verb
                     lines.append(
                         f"| {step} | `{s.cmd}` | {code} | {dur} |"
@@ -771,8 +783,10 @@ def _render_detail_html(r: Row) -> str:
     parts.append("<table class='steps'><thead><tr><th>step</th><th>cmd</th>"
                  "<th>exit</th><th>time</th></tr></thead><tbody>")
     for s in sc.steps:
-        dur = f"{s.duration_s:.3g}s" if s.duration_s is not None else ""
-        code = "" if s.code is None else str(s.code)
+        running = s.code is None  # no exit code yet -> running right now
+        dur = ("running…" if running else
+               (f"{s.duration_s:.3g}s" if s.duration_s is not None else ""))
+        code = "⏳" if running else str(s.code)
         step = (f'<a href="{_h(r.midpoint)}/{_h(s.log)}">{_h(s.verb)}</a>'
                 if s.log else _h(s.verb))
         parts.append(

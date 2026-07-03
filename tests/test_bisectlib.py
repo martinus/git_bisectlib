@@ -275,6 +275,49 @@ class TestEngine(unittest.TestCase):
         # and the old "bisectlog status:" announcement is gone
         self.assertNotIn("bisectlog status", stderr)
 
+    def test_log_streams_live_and_records_running_step(self):
+        # the log file must be written *as output arrives* (watchable), and the
+        # sidecar must carry a provisional 'running' step (code None) while the
+        # command is still executing — both drive the live status.md.
+        import time
+        d = make_repo()
+        cache = tempfile.mkdtemp(prefix="bl-live-")
+        recipe = Path(d, "recipe.py")
+        recipe.write_text(
+            "import sys; sys.path.insert(0, %r)\n" % str(ROOT)
+            + "import bisectlib as b\n"
+            "b.run('echo LIVE_MARKER; sleep 3')\n")
+        env = {**os.environ, "PYTHONPATH": str(ROOT), "XDG_CACHE_HOME": cache,
+               "NO_COLOR": "1"}
+        proc = subprocess.Popen([sys.executable, "recipe.py"], cwd=d,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=env)
+        try:
+            deadline = time.time() + 2.5  # well before the 3s sleep ends
+            live_log = running_step = False
+            while time.time() < deadline and proc.poll() is None:
+                logs = list(Path(cache, "bisectlib").glob("*/*/01-run-*.log"))
+                if logs and "LIVE_MARKER" in logs[0].read_text():
+                    live_log = True
+                evs = list(Path(cache, "bisectlib").glob("*/*/eval.json"))
+                if evs:
+                    steps = json.loads(evs[0].read_text()).get("steps", [])
+                    if any(s.get("code") is None for s in steps):
+                        running_step = True
+                if live_log and running_step:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(live_log, "log file did not stream output live")
+            self.assertTrue(running_step, "no provisional running step recorded")
+            self.assertIsNone(proc.poll(), "command exited; not a live check")
+        finally:
+            proc.wait()
+        # once finished, the running placeholder is replaced by the real result
+        ev = json.loads(next(Path(cache, "bisectlib").glob("*/*/eval.json")).read_text())
+        self.assertEqual(len(ev["steps"]), 1)
+        self.assertEqual(ev["steps"][0]["code"], 0)
+        self.assertNotIn("running", ev["steps"][0])
+
     def test_once_runs_once_under_real_bisect(self):
         # a real `git bisect run` over several commits: the setup guarded by
         # once() must execute exactly once across all evaluations, even

@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -247,13 +247,24 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
     """Run a shell command, streaming its output live while also capturing it.
 
     Combined stdout+stderr is echoed to this process's stderr as it arrives (so
-    you watch the build/test run — git bisect run forwards it to your terminal)
-    and simultaneously collected into the returned Result and the log file.
-    The process group is killed on timeout.
+    you watch the build/test run — git bisect run forwards it to your terminal),
+    appended line-by-line to the log file so it can be tailed/opened *while the
+    command runs*, and collected into the returned Result. The process group is
+    killed on timeout.
     """
     start = time.monotonic()
     workdir = _workdir(cwd)
     env = _clean_env(workdir)
+    # Open the log up front and write to it as output arrives, so the linked log
+    # in status.md exists and grows live (watchable), instead of only appearing
+    # once the command finishes. Line-buffered so each line is flushed promptly.
+    log_fh = None
+    if log_path is not None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = open(log_path, "w", buffering=1)
+        except OSError:
+            log_fh = None
     proc = subprocess.Popen(
         cmd, shell=True, cwd=workdir, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -265,6 +276,11 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
         for line in proc.stdout:            # line-buffered; live as it arrives
             captured.append(line)
             sys.stderr.write(line)
+            if log_fh is not None:
+                try:
+                    log_fh.write(line)
+                except OSError:
+                    pass
         sys.stderr.flush()
 
     pump = threading.Thread(target=_pump, daemon=True)
@@ -281,16 +297,15 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
             pass
         proc.wait()
     pump.join()
+    if log_fh is not None:
+        try:
+            log_fh.close()
+        except OSError:
+            pass
 
     out = "".join(captured)
     code = -1 if timed_out else proc.returncode   # -1 == timeout sentinel
     seconds = time.monotonic() - start
-    if log_path is not None:
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(out)
-        except OSError:
-            pass
     return Result(code=code, out=out, seconds=seconds)
 
 
@@ -462,6 +477,7 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
     """
     _echo_start("run", cmd)
     log_name = f"{len(_steps)+1:02d}-run-{_slug(cmd)}.log"
+    _begin_step("run", cmd, log_name)
     res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
     timed_out = res.code == -1
     ok = res.code == 0
@@ -525,6 +541,7 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
     last: Optional[Result] = None
     idx, slug = len(_steps) + 1, _slug(cmd)
     log_name = f"{idx:02d}-test-{slug}-1.log"  # actual file of the last attempt run
+    _begin_step("test", cmd, log_name)
     for i in range(warmup + attempts):
         log_name = f"{idx:02d}-test-{slug}-{i+1}.log"
         res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
@@ -570,6 +587,7 @@ def check(cmd: str, *, timeout: Optional[float] = None,
     """Run once and return the Result. NEVER exits the process."""
     _echo_start("check", cmd)
     log_name = f"{len(_steps)+1:02d}-check-{_slug(cmd)}.log"
+    _begin_step("check", cmd, log_name)
     res = _exec(cmd, timeout, _commit_log_dir() / log_name, cwd)
     _record_step("check", cmd, res, res.ok, log=log_name)
     _echo_result("check", cmd, res.ok, res.seconds, "ok" if res.ok else "fail")
@@ -613,6 +631,17 @@ def _once_marker(key: str) -> Path:
     return _logs_dir() / f"once-{slug}-{h}"
 
 
+def _begin_step(verb, cmd, log=None) -> None:
+    """Register a provisional 'running' step and refresh status.md *before* the
+    command executes, so the report immediately shows what is running right now
+    with a link to its (live, growing) log. `_record_step` replaces it once the
+    command finishes.
+    """
+    _steps.append({"verb": verb, "cmd": cmd, "code": None,
+                   "duration_s": None, "log": log, "running": True})
+    _flush_status()
+
+
 def _record_step(verb, cmd, res: Optional[Result], ok, extra=None, outcome=None,
                  log=None):
     step = {"verb": verb, "cmd": cmd,
@@ -623,7 +652,12 @@ def _record_step(verb, cmd, res: Optional[Result], ok, extra=None, outcome=None,
         step["outcome"] = outcome
     if extra:
         step.update(extra)
-    _steps.append(step)
+    # Replace the in-flight 'running' placeholder from _begin_step, if present,
+    # rather than appending a duplicate row.
+    if _steps and _steps[-1].get("running"):
+        _steps[-1] = step
+    else:
+        _steps.append(step)
     _flush_status()  # keep status.md current after every step, so it's watchable live
 
 

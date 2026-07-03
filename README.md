@@ -244,6 +244,13 @@ When the bisect finishes, the report shows the culprit **the way `git bisect`
 does** — the full commit header, message, and diffstat — so you can read the
 verdict without another `git show`.
 
+`status.md` is (re)written the moment each command **starts**, not just when it
+finishes, so the report always names what is running right now — the in-flight
+commit shows a `⏳ running` step and the top-level row reads `⏳ running \`…\``.
+Each step links to its captured log, and that log is streamed to disk line by
+line as the command runs, so you can click it (HTML) or tail it and **watch the
+build/test as it happens** instead of waiting for it to complete.
+
 Each `good`/`bad`/`midpoint` cell is the commit hash plus its **commit date and
 author** (the subject is omitted to keep rows compact); the **range** column is the
 `good..bad` span (duration · commit count).
