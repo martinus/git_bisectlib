@@ -726,10 +726,28 @@ def _write_sidecar() -> None:
         pass
 
 
-def _refresh_status_md() -> None:
+def _refresh_status_md(decided: bool = False) -> None:
+    """Re-render status.md from the reconstructed report.
+
+    `git bisect run` records the current commit's good/bad/skip mark only *after*
+    this process exits, so `git bisect log` doesn't yet reflect our verdict while
+    we render. That is fine for the live per-step writes (the commit shows as an
+    in-flight row). But on the *final* commit git records the mark, names the
+    first-bad commit, and stops — no further evaluation runs, so status.md would
+    forever miss the answer. When `decided` is set (finalize, real verdict), feed
+    build_report a log with our own mark appended so the finished report is
+    complete and shows the first-bad commit.
+    """
     try:
         import bisectlog
-        rep = bisectlog.build_report(_toplevel(), logs_dir=str(_logs_dir()))
+        log_text = None
+        outcome = _final.get("outcome")
+        if decided and _in_git() and outcome in ("good", "bad", "skip"):
+            log = _git("bisect", "log", check=False)
+            if log:
+                log_text = f"{log}\ngit bisect {outcome} {sha()}\n"
+        rep = bisectlog.build_report(
+            _toplevel(), log_text=log_text, logs_dir=str(_logs_dir()))
         if rep is None:
             return
         path = _status_md_path()
@@ -773,7 +791,7 @@ def _finalize() -> None:
             except OSError:
                 pass
     _write_sidecar()
-    _refresh_status_md()
+    _refresh_status_md(decided=True)
 
 
 def _excepthook(exc_type, exc, tb):

@@ -398,6 +398,39 @@ class TestEngine(unittest.TestCase):
         self.assertRegex(step["log"], r"-test-.*-\d+\.log$")
         self.assertTrue((ev.parent / step["log"]).is_file())
 
+    def test_status_md_shows_first_bad_at_end(self):
+        # End-to-end regression: `git bisect run` records a commit's mark only
+        # AFTER the recipe exits, and stops after the final commit — so nothing
+        # re-renders status.md with the resolved answer. The finalize render must
+        # inject its own verdict, or status.md never names the first-bad commit.
+        d = tempfile.mkdtemp(prefix="bl-firstbad-")
+        sh(d, "git", "init", "-q")
+        sh(d, "git", "config", "user.email", "t@t.t")
+        sh(d, "git", "config", "user.name", "T")
+        shas = []
+        for i in range(1, 9):
+            Path(d, "code.txt").write_text("BUG\n" if i >= 5 else "ok\n")
+            Path(d, f"f{i}").write_text(str(i))
+            sh(d, "git", "add", "-A")
+            sh(d, "git", "commit", "-q", "-m", f"commit {i}")
+            shas.append(sh(d, "git", "rev-parse", "HEAD").stdout.strip())
+        bug = shas[4]  # commit 5: first to carry the BUG
+        Path(d, "recipe.py").write_text(
+            "import sys\nsys.path.insert(0, %r)\n" % str(ROOT) +
+            "import bisectlib as b\n"
+            "b.test('! grep -q BUG code.txt')\n")
+        cache = tempfile.mkdtemp(prefix="bl-firstbad-cache-")
+        env = {**os.environ, "XDG_CACHE_HOME": cache, "NO_COLOR": "1",
+               "PYTHONPATH": str(ROOT)}
+        sh(d, "git", "bisect", "start", shas[-1], shas[0], env=env)
+        sh(d, "git", "bisect", "run", sys.executable, "recipe.py", env=env)
+        status = list(Path(cache, "bisectlib").glob("*/status.md"))
+        self.assertTrue(status, "status.md was not written")
+        text = status[0].read_text()
+        self.assertIn("First bad commit", text)
+        self.assertIn(bug[:9], text)
+        sh(d, "git", "bisect", "reset", env=env)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
