@@ -63,8 +63,12 @@ class TestBisectlog(unittest.TestCase):
         md = bisectlog.render_markdown(rep)
         self.assertIn("First bad commit", md)
         self.assertIn(bug_sha[:9], md)
+        # the full culprit commit is shown git-bisect style: metadata + diffstat
+        self.assertIn("Author:", md)
+        self.assertIn(" changed, ", md)  # git show --stat summary line
         html = bisectlog.render_html(rep)
         self.assertIn("firstbad", html)
+        self.assertIn(" changed, ", html)
         run(d, "git", "bisect", "reset")
 
     def test_midbisect_rows_and_bounds(self):
