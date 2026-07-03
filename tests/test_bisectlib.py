@@ -275,9 +275,9 @@ class TestEngine(unittest.TestCase):
         # and the old "bisectlog status:" announcement is gone
         self.assertNotIn("bisectlog status", stderr)
 
-    def test_is_first_run_once_under_real_bisect(self):
+    def test_once_runs_once_under_real_bisect(self):
         # a real `git bisect run` over several commits: the setup guarded by
-        # is_first_run() must execute exactly once across all evaluations, even
+        # once() must execute exactly once across all evaluations, even
         # though `git bisect log` grows each step (regression guard for the id).
         d = tempfile.mkdtemp(prefix="bl-first-")
         sh(d, "git", "init", "-q")
@@ -294,7 +294,7 @@ class TestEngine(unittest.TestCase):
         Path(d, "recipe.py").write_text(
             "import sys; sys.path.insert(0, %r)\n" % str(ROOT)
             + "import bisectlib as b\n"
-            "if b.is_first_run():\n"
+            "if b.once():\n"
             f"    b.run('echo x >> {counter}')\n"
             "b.test('! grep -q BUG code.txt')\n")
         cache = tempfile.mkdtemp(prefix="bl-cache-")
@@ -308,24 +308,49 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(len(counter.read_text().split()), 1)  # ran exactly once
         sh(d, "git", "bisect", "reset", env=env)
 
-    def test_is_first_run_reruns_after_abort(self):
+    def test_once_reruns_after_abort(self):
         d = make_repo()
         cache = tempfile.mkdtemp(prefix="bl-first2-")
-        # first-run setup aborts -> marker NOT committed
+        # once() setup aborts -> marker NOT committed
         abort_body = ("import bisectlib as b\n"
-                      "if b.is_first_run():\n"
+                      "if b.once():\n"
                       "    b.run('echo x >> counter')\n"   # runs, then...
                       "    b.run('false')\n")             # aborts
         code, _, _ = run_recipe(d, abort_body, cache=cache)
         self.assertEqual(code, 128)  # ABORT
-        # ... so on the next run is_first_run() is still True and setup re-runs
+        # ... so on the next run once() is still True and setup re-runs
         ok_body = ("import bisectlib as b\n"
-                   "if b.is_first_run():\n"
+                   "if b.once():\n"
                    "    b.run('echo x >> counter')\n"
                    "b.test('true')\n")
         code2, _, _ = run_recipe(d, ok_body, cache=cache)
         self.assertEqual(code2, 0)
         self.assertEqual(len(Path(d, "counter").read_text().split()), 2)  # ran again
+
+    def test_once_keys_are_independent(self):
+        # keys get independent markers: a key committed in an earlier evaluation
+        # stays done, while a *new* key introduced later still fires exactly once.
+        # (With the old single global marker, the second key would never run.)
+        d = make_repo()
+        cache = tempfile.mkdtemp(prefix="bl-once3-")
+        # run 1: only "a" present -> runs and commits its marker
+        body1 = ("import bisectlib as b\n"
+                 "if b.once('a'):\n"
+                 "    b.run('echo x >> a_cnt')\n"
+                 "b.test('true')\n")
+        code1, _, _ = run_recipe(d, body1, cache=cache)
+        self.assertEqual(code1, 0)
+        # run 2: "a" is already done (skips), "b" is new -> "b" runs, "a" does not
+        body2 = ("import bisectlib as b\n"
+                 "if b.once('a'):\n"
+                 "    b.run('echo x >> a_cnt')\n"
+                 "if b.once('b'):\n"
+                 "    b.run('echo x >> b_cnt')\n"
+                 "b.test('true')\n")
+        code2, _, _ = run_recipe(d, body2, cache=cache)
+        self.assertEqual(code2, 0)
+        self.assertEqual(len(Path(d, "a_cnt").read_text().split()), 1)  # never re-ran
+        self.assertEqual(len(Path(d, "b_cnt").read_text().split()), 1)  # fired once
 
     def test_check_does_not_exit(self):
         d = make_repo()

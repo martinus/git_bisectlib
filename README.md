@@ -114,25 +114,29 @@ test("./bench", attempts=5, min_passes=3, passed=lambda r: r.seconds < 6.7)  # m
 (`min(times)<T` → `min_passes=1`; `max(times)<T` → all; `median<T` → majority.)
 
 ```python
-from bisectlib import (run, test, check, is_first_run,
+from bisectlib import (run, test, check, once,
                        good, bad, skip, abort, replace, fixup, in_range)
 ```
 
-- **`is_first_run()`** — guard one-time, commit-independent setup so it doesn't
+- **`once(key="setup")`** — guard one-time, commit-independent setup so it doesn't
   repeat on every commit:
 
   ```python
-  if is_first_run():
+  if once():                       # default key, for a single setup block
       run("./fetch-deps")          # fetch a dependency, create a symlink, …
       run("ln -fs $(pwd)/… …")
+
+  if once("fetch-agent"):          # independent keys → independent markers
+      run("./gradlew :nativesdk:fetchAgent")
   ```
 
-  Returns True on the first commit evaluated in the bisect, False after. The
-  "already ran" marker (keyed by the bisect id) is committed only once that
-  evaluation finishes with a real verdict — *not* on abort — so a setup that fails
-  re-runs next time. Its artifacts must survive `git checkout` (untracked / outside
-  the tree). Use it for what's the same on every commit; use `run` for what must be
-  rebuilt per commit.
+  Returns True the first time each `key` is seen in the bisect, False after. A
+  key's "already ran" marker (scoped to the bisect id) is committed only once an
+  evaluation that armed it finishes with a real verdict — *not* on abort. Keys
+  committed by an earlier evaluation stay done; every key armed in an evaluation
+  that then aborts re-runs next time (keep each block idempotent). Its artifacts
+  must survive `git checkout` (untracked / outside the tree). Use it for what's
+  the same on every commit; use `run` for what must be rebuilt per commit.
 - **`replace(path, old, new)`** — sed-like edit, auto-reverted. `old` is a literal
   `str` or a compiled `re.Pattern` (the *type* decides; no `regex=` flag).
 - **`fixup(patch=… | cherry_pick=…, when=…)`** — context manager that applies a
