@@ -221,6 +221,17 @@ bisect  good 2801e957a  bad 79cb050c2
 
 ## 🎯 First bad commit: `5c9dcafb3` — commit 8: change subsystem 8
 
+```
+commit 5c9dcafb3a1e2f00d4c8b9a7e6f5d4c3b2a10987
+Author: Eve <eve@example.com>
+Date:   2026-06-15 11:40:00 +0200
+
+    commit 8: change subsystem 8
+
+ src/subsystem8.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+```
+
 | good | bad | midpoint | range | status |
 |------|-----|----------|-------|--------|
 | `2801e9572` 2026-05-28 22:06, Bob | `79cb050c2` 2026-06-24 13:02, Alice | `cb5394973` 2026-06-12 06:06, Carol | 27d 15h · 11 commits | 🟢 good |
@@ -228,6 +239,10 @@ bisect  good 2801e957a  bad 79cb050c2
 | `cb5394973` 2026-06-12 06:06, Carol | `95345541b` 2026-06-18 09:12, Dan | `5c9dcafb3` 2026-06-15 11:40, Eve | 6d 3h · 3 commits | 🔴 bad |
 | `cb5394973` 2026-06-12 06:06, Carol | `5c9dcafb3` 2026-06-15 11:40, Eve | `19d89b121` 2026-06-13 08:20, Fay | 3d 5h · 2 commits | 🟢 good |
 ```
+
+When the bisect finishes, the report shows the culprit **the way `git bisect`
+does** — the full commit header, message, and diffstat — so you can read the
+verdict without another `git show`.
 
 Each `good`/`bad`/`midpoint` cell is the commit hash plus its **commit date and
 author** (the subject is omitted to keep rows compact); the **range** column is the

@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.8.0"
+__version__ = "0.10.0"
 
 STATUS_ICON = {"good": "🟢", "bad": "🔴", "skip": "⏭️", "todo": "🕒", "abort": "🛑"}
 
@@ -575,6 +575,16 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
             f"## 🎯 First bad commit: `{rep.short(rep.first_bad)}` "
             f"— {rep.subject(rep.first_bad)}"
         )
+        # Show the full commit (header, message, diffstat) the way `git bisect`
+        # reports it when it lands on the first bad commit. One `git show --stat`
+        # yields the commit metadata, message, and per-file stat without the diff.
+        full = git(rep.repo, "show", "--stat", "--format=medium",
+                   rep.first_bad, check=False)
+        if full:
+            lines.append("")
+            lines.append("```")
+            lines.append(full)
+            lines.append("```")
     if rep.note:
         lines.append("")
         lines.append(f"> ⚠️ {rep.note}")
@@ -712,8 +722,8 @@ def render_html(
         )
 
     if rep.first_bad:
-        full = git(rep.repo, "show", "-s",
-                   "--format=%h%n%an <%ae>%n%cI%n%s%n%n%b", rep.first_bad, check=False)
+        full = git(rep.repo, "show", "--stat", "--format=medium",
+                   rep.first_bad, check=False)
         out.append("<div class='firstbad'>")
         out.append(f"<h2>🎯 First bad commit: <span class='sha'>{_h(rep.short(rep.first_bad))}</span></h2>")
         out.append(f"<pre>{_h(full)}</pre></div>")
