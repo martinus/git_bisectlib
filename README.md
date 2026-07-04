@@ -30,10 +30,15 @@ test("ctest -R foo", attempts=5, min_passes=2)    # flaky? 2 of up to 5 passes =
 ```sh
 git bisect start <BAD> <GOOD>
 git bisect run python recipe.py
+git bisect reset                # done — return to your branch
 ```
 
-That's the whole thing. **Pure standard library, no dependencies** — just `git` on your
-`PATH`.
+That's the whole thing — three git commands you already half-know, plus a recipe.
+**Pure standard library, no dependencies** — just `git` on your `PATH`.
+
+> **Tip:** a recipe is a plain script, so run `python recipe.py` on your current
+> checkout *before* starting — exit `0` means "good", non-zero tells you it works — a
+> five-second smoke test that catches a broken recipe before git spends an hour on it.
 
 ---
 
@@ -139,7 +144,8 @@ chose → the **result** — so you see the range funnel down as you scan. The r
 re-rendered the moment each command *starts*, links every step to its live-streamed log
 under `.bisect/<sha>/`, and — when the search resolves — shows the culprit the way
 `git bisect` does, with the full commit and diffstat. When it's done, you have the answer
-without another `git show`.
+without another `git show` — then `git bisect reset` puts you back on the branch you
+started from.
 
 > `.bisect/` is registered in the repo's **local** excludes (`.git/info/exclude`, never your
 > tracked `.gitignore`), so it stays out of `git status`, is never committed, and survives
@@ -183,7 +189,13 @@ from bisectlib import (run, test, check, once,
 | `good()` / `bad()` / `skip()` / `abort()` | decide the commit **directly from Python** | — |
 
 Every verb takes `cwd=` (relative paths resolve against the repo root; `configure(cwd=…)`
-sets a default) and `timeout=`.
+sets a default) and `timeout=` seconds. When a step exceeds `timeout`, `on_timeout` decides
+the outcome — `run` defaults to `abort`, `test` to `skip`.
+
+> **Hunting a hang?** If the regression is that a command stops terminating, set
+> `test("./app", timeout=30, on_timeout="bad")` — a commit that runs forever is the bug,
+> so time-out means bad. (The default `on_timeout="skip"` would route *around* every bad
+> commit and stall the bisect.)
 
 - **`once(key="setup")`** — run one-time, commit-independent setup (fetch a dependency,
   create a symlink) exactly once across the whole bisect instead of on every commit.
@@ -193,6 +205,16 @@ sets a default) and `timeout=`.
   revert.
 - **`in_range("v1.0..v2.0")`, `touches("src/x.c")`** — predicates for `when=`, also usable in
   a plain `if`.
+- **`sha()`, `subject()`, `is_clean()`** — read HEAD's full sha, its commit subject, and
+  whether the tree is clean; handy inside a `when=` predicate or before a custom
+  `good()`/`bad()` decision.
+- **`configure(clean="reset"|"clean", color=…, cwd=…, logs=…, status_md=…)`** — tune tree
+  cleanup (`"clean"` adds `git clean -fdx`, keeping `.bisect/`), force color on/off, or
+  relocate the report and logs.
+
+Mistyped a string option (`bad_when="Pass"`, `on_timeout="abrot"`) or an impossible
+`min_passes`? The verb raises immediately — which **aborts** the bisect with a clear
+message rather than silently defaulting and quietly bisecting in the wrong direction.
 
 ### The exit-code contract
 
