@@ -140,6 +140,44 @@ class TestEngine(unittest.TestCase):
             d, "import bisectlib as b\nb.test('true', bad_when='pass')\n")
         self.assertEqual(code, 1)  # BAD
 
+    def test_unrunnable_test_aborts_not_bad(self):
+        # A test that can't be launched (127 command-not-found / 126 not-exec) is
+        # a broken recipe, NOT a "bug present" verdict. Marking it bad would
+        # silently mis-bisect, so it must ABORT (128) instead.
+        d = make_repo()
+        # 127: no such command
+        code, _, _ = run_recipe(
+            d, "import bisectlib as b\nb.test('./nonexistent-binary')\n")
+        self.assertEqual(code, 128)  # ABORT, not BAD (1)
+
+        # 126: exists but not executable
+        Path(d, "notexec.sh").write_text("#!/bin/sh\necho hi\n")  # no +x bit
+        code2, _, _ = run_recipe(
+            d, "import bisectlib as b\nb.test('./notexec.sh')\n")
+        self.assertEqual(code2, 128)  # ABORT
+
+    def test_unrunnable_test_aborts_even_with_custom_passed(self):
+        # The strongest case: a benchmark predicate `r.seconds < T` ignores the
+        # exit code, so a test that never launched (near-0s) would otherwise be
+        # scored GOOD — a false negative. The unrunnable guard must fire first.
+        d = make_repo()
+        code, _, _ = run_recipe(
+            d, "import bisectlib as b\n"
+               "b.test('./nonexistent-binary', passed=lambda r: r.seconds < 100)\n")
+        self.assertEqual(code, 128)  # ABORT, not GOOD (0)
+
+    def test_real_test_failure_still_bad(self):
+        # Guard against over-reach: an ordinary non-zero exit (the test ran and
+        # reported failure) must still be BAD, and a crash/signal stays BAD too.
+        d = make_repo()
+        self.assertEqual(
+            run_recipe(d, "import bisectlib as b\nb.test('exit 1')\n")[0], 1)   # BAD
+        self.assertEqual(
+            run_recipe(d, "import bisectlib as b\nb.test('exit 3')\n")[0], 1)   # BAD
+        # a segfault-style signal (bash reports 139) may BE the regression -> BAD
+        self.assertEqual(
+            run_recipe(d, "import bisectlib as b\nb.test('kill -SEGV $$')\n")[0], 1)
+
     def test_replace_reverts_tree(self):
         d = make_repo()
         body = ("import bisectlib as b\n"

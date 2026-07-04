@@ -574,6 +574,12 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
 
     ``warmup`` runs extra leading throwaway executions (excluded from the pass
     count). ``bad_when="pass"`` inverts the bug direction.
+
+    A test that **cannot be run** — exit ``127`` (command not found) or ``126``
+    (not executable) — is treated as a broken recipe and **ABORTS**, never BAD:
+    a test that never executed is not evidence the bug is present, and marking it
+    bad would silently mis-bisect. (A crash/signal, exit ``>=128``, stays BAD — it
+    may be the regression itself.)
     """
     _echo_start("test", cmd)
     if passed is None:
@@ -598,6 +604,23 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
                                 "timeout": True})
             _echo_result("test", cmd, False, res.seconds, on_timeout)
             _decide({"skip": SKIP, "bad": BAD, "abort": ABORT}.get(on_timeout, SKIP))
+        if res.code in (126, 127):
+            # The shell couldn't run the test at all — 127 (command not found) or
+            # 126 (not executable): a broken recipe/build, not a "bug present"
+            # verdict. Marking it BAD here would silently mis-bisect (the exact
+            # sin this library exists to prevent), so ABORT instead — fix the
+            # recipe and resume. Retrying is pointless (it's deterministic), so
+            # bail on the first occurrence. A crash/signal (exit >=128) is left
+            # as BAD on purpose: it may *be* the regression.
+            _record_step("test", cmd, res, False, log=log_name,
+                         extra={"attempts": attempts, "passes": passes,
+                                "unrunnable": res.code})
+            _echo_result("test", cmd, False, res.seconds, "abort")
+            sys.stderr.write(
+                f"   test command exited {res.code}: it could not be run "
+                f"(missing binary / wrong path / not built?) — aborting so you "
+                f"can fix the recipe, not marking this commit bad\n")
+            _decide(ABORT)
         if i < warmup:
             continue
         executed += 1
