@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/martinus/bisectlib"
+Homepage = "https://github.com/martinus/git-bisectlib"
 
 [tool.setuptools]
 packages = ["bisectlib"]
