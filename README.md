@@ -1,59 +1,30 @@
 # bisectlib
 
-**A Python toolkit for automated `git bisect`.** Write a tiny recipe — a normal
-Python script — that builds your project, runs your (possibly flaky) tests, and
-reports a verdict; then let `git bisect run` drive it to the exact commit that
-introduced a regression. `bisectlib` handles the fiddly parts that make
-hand-rolled bisect scripts painful:
+**Reliable `git bisect run` recipes in a few lines of Python.**
 
-- **Builds vs. results.** A broken build is *infrastructure*, not a verdict —
-  `run()` **aborts** the bisect so you can fix the recipe and resume, instead of
-  silently skipping commits and mis-bisecting. `test()` is the actual verdict.
-- **Flaky tests.** `test("…", attempts=5, min_passes=2)` — pass 2 of up to 5
-  tries (it stops as soon as the verdict is decided).
-- **Benchmarks.** Give `test()` a time-aware predicate: `passed=lambda r: r.seconds < 6.7`.
-  Combined with the quorum it expresses any aggregate — e.g. "min of 5 runs < 6.7s".
-- **Per-range build fixes.** `fixup(patch=…)` / `replace(...)` apply a patch or a
-  sed-like edit for the commits that need it, then **auto-revert** so the tree
-  stays clean for the next checkout.
-- **A live report.** Every run records what happened into
-  [`.bisect/status.md`](#the-live-status-report-bisectstatusmd) — a Markdown page
-  in your repo that updates as the bisect runs, watchable right in your editor.
+`git bisect` finds the commit that introduced a bug by binary-searching your history, and
+`git bisect run` automates it — *if* your test script is perfect. But the script is exactly
+where bisects quietly go wrong:
 
-It is **pure standard library** — no dependencies, just `git` on your `PATH`.
+- A commit **doesn't build** → your script exits non-zero → git records it as **bad** → the
+  search converges on the wrong commit and never tells you.
+- A **flaky test** fails once → same story: an innocent commit takes the blame.
+- A **performance** regression has no exit code to give — so you hand-roll timing math every
+  time.
 
-See [`SPEC.md`](SPEC.md) for the full design rationale.
-
-## Install
-
-```sh
-pip install git+https://github.com/martinus/bisectlib
-```
-
-That single command gives you `import bisectlib` for recipes. It's pure standard
-library — no runtime dependencies — and ships type information (`py.typed`), so
-editors and type-checkers resolve `run`, `test`, … without warnings. See
-[Install / how a recipe finds `bisectlib`](#install--how-a-recipe-finds-bisectlib)
-for a zero-install alternative.
-
-**Updating a git install:** re-running the command above is a no-op if the
-version number hasn't changed — pip sees it already installed and skips the
-rebuild. To force a refresh from the latest `main`:
-
-```sh
-pip install --force-reinstall git+https://github.com/martinus/bisectlib
-```
-
-## A recipe in 4 lines
+bisectlib is the recipe you *meant* to write. It knows the difference between "this commit
+is **bad**" and "I **couldn't test** this commit," retries flaky tests until the verdict is
+real, judges benchmarks, patches un-buildable commits on the fly — and streams a live report
+you can watch.
 
 ```python
 # recipe.py
 from bisectlib import run, test
 
-run("cmake -B build")                 # infra: a broken configure ABORTS (exit 128)
-run("cmake --build build -j")         # infra: a broken build ABORTS
-test("ctest --test-dir build -R foo", attempts=5, min_passes=2)   # 2 of up to 5 => good
-# reaching the end == GOOD
+run("cmake -B build")                             # broken build? ABORT — don't guess
+run("cmake --build build -j")
+test("ctest -R foo", attempts=5, min_passes=2)    # flaky? 2 of up to 5 passes = good
+# fell off the end → GOOD
 ```
 
 ```sh
@@ -61,140 +32,84 @@ git bisect start <BAD> <GOOD>
 git bisect run python recipe.py
 ```
 
-A passing step continues to the next line; a failing `test()` is **bad**, a
-broken `run()` **aborts** (or **skips** with `run(..., skip_on_error=True)`).
-Falling off the end is **good**. That is the whole mental model.
+That's the whole thing. **Pure standard library, no dependencies** — just `git` on your
+`PATH`.
 
-Because passing steps continue, you can use **several `test()` calls** and they
-combine with logical AND — any one failing is **bad**, all passing is **good**:
+---
+
+## Why not just a `git bisect run` shell script?
+
+Because the naive script silently gives wrong answers, and the careful one is a pile of
+plumbing you rewrite on every hard bisect. bisectlib is that plumbing, done once and done
+right:
+
+| A hand-rolled `git bisect run` script | bisectlib |
+|---|---|
+| A broken build exits non-zero → git reads it as **bad** → **silent mis-bisect** | `run()` **aborts** on build failure — bisect state is kept, you fix the recipe and resume |
+| One flaky failure blames the wrong commit | `test(attempts=5, min_passes=2)` — a quorum that stops the moment the verdict is decided |
+| Benchmarks need custom timing + threshold code | `passed=lambda r: r.seconds < 6.7` — any aggregate (min/median/all) via the quorum |
+| Un-buildable ranges need manual patching each run | `fixup(patch=…)` / `replace(...)` apply a fix, then **auto-revert** to keep the tree clean |
+| Progress is a wall of scrolling output | a live `.bisect/status.md` — watch the range funnel down to the culprit |
+
+The headline is the first row: **a broken build is not a bad commit.** Treating the two the
+same is the classic way a `git bisect run` script lands on the wrong answer without a single
+error message. bisectlib makes that distinction the default.
+
+## The four things it gets right
+
+**1. Infrastructure vs. verdict.** `run()` is for configure/build/setup — if it fails, your
+*harness* is probably broken, so it **aborts** the whole bisect (git keeps its state) rather
+than mis-marking the commit. `test()` is the actual verdict: pass → good, fail → bad. For a
+genuinely un-buildable stretch, opt into skipping with `run(..., skip_on_error=True)`.
+
+**2. Flaky tests.** `attempts` is the *max* tries, `min_passes` how many must pass; it stops
+as soon as the outcome is locked in:
 
 ```python
-run("make")
-test("./unit_tests")                  # both must pass for the
-test("./integration_tests --quick")   # commit to count as good
-test("./bench", attempts=5, min_passes=1,           # …and the fastest of 5
-     passed=lambda r: r.seconds < 6.7)              # runs is under 6.7s
+test("./integration", attempts=5, min_passes=2)   # 2 of up to 5 = good
 ```
 
-## The API
-
-| Verb | Meaning | On failure |
-|------|---------|------------|
-| `run(cmd, skip_on_error=False)` | infrastructure (configure/build/setup) | **abort** (or skip) |
-| `test(cmd, attempts=1, min_passes=None, passed=None, warmup=0, bad_when="fail")` | the verdict | **bad** |
-| `check(cmd) -> Result` | run once, **never exits** (introspection: `.ok`, `.out`, `.seconds`) | — |
-| `good()` / `bad()` / `skip()` / `abort()` | decide the commit **directly from Python** | — |
-
-The verdict primitives let you decide from arbitrary Python after measuring something with
-`check()` — no need to shell back out to `test` just to compare values:
+**3. Benchmarks are just a time-aware predicate.** `passed` receives the `Result` (which
+carries `.seconds`), and the quorum count expresses any aggregate:
 
 ```python
+test("./bench", attempts=5, min_passes=1, passed=lambda r: r.seconds < 6.7)  # min of 5 < 6.7s
+test("./bench", attempts=5,               passed=lambda r: r.seconds < 6.7)  # all 5   < 6.7s
+test("./bench", attempts=5, min_passes=3, passed=lambda r: r.seconds < 6.7)  # median  < 6.7s
+```
+
+**4. Per-range build fixes that clean up after themselves.** Old commits often need a small
+patch to compile with today's toolchain. Apply one for the commits that need it — it reverts
+automatically so `git bisect` can move to the next commit:
+
+```python
+with fixup("fixes/missing-header.patch", when=in_range("abc123..def456")):
+    run("cmake -B build")
+    run("cmake --build build -j")
+test("ctest -R foo")
+
+replace("CMakeLists.txt", "c++14", "c++17")   # sed-like edit, also auto-reverted
+```
+
+You can also **decide straight from Python** after measuring something — no need to shell
+back out just to compare a value:
+
+```python
+from bisectlib import check, bad
+
 size = int(check("stat -c%s build/app").out)
 if size > 5 * 1024 * 1024:
-    bad("binary too big")     # exit 1; reaching the end instead would be good
+    bad("binary too big")     # exit 1; reaching the end instead is good
 ```
 
-All three verbs accept **`cwd=`** to set the working directory for the command (relative
-paths resolve against the repo root, so `cwd="build"` means `<repo>/build`; absolute paths
-are honoured). Set a default for every command with `configure(cwd="build")`. Commands
-otherwise run at the repo root.
+## Watch it work: `.bisect/status.md`
 
-**Flaky & benchmark tests.** `attempts` is the *max* tries, `min_passes` how many must
-pass (default: all); evaluation stops as soon as the verdict is decided. `passed` is a
-predicate over the `Result` (`.ok`, `.seconds`, …) deciding if one attempt passed —
-default `lambda r: r.ok`. Because it sees `.seconds`, timing thresholds are just
-predicates plus the quorum:
+As the recipe runs, bisectlib writes a live Markdown report to **`.bisect/status.md`** at
+the root of the repo you're bisecting. Open it in your editor and leave it open — it's a
+fixed path that updates in place, so you watch the range narrow and see what's building
+*right now* without babysitting a terminal.
 
-```python
-test("./bench", attempts=5, min_passes=1, passed=lambda r: r.seconds < 6.7)  # min < 6.7s
-test("./bench", attempts=5,               passed=lambda r: r.seconds < 6.7)  # all 5 < 6.7s
-test("./bench", attempts=5, min_passes=3, passed=lambda r: r.seconds < 6.7)  # median < 6.7s
-```
-(`min(times)<T` → `min_passes=1`; `max(times)<T` → all; `median<T` → majority.)
-
-```python
-from bisectlib import (run, test, check, once,
-                       good, bad, skip, abort, replace, fixup, in_range)
-```
-
-- **`once(key="setup")`** — guard one-time, commit-independent setup so it doesn't
-  repeat on every commit:
-
-  ```python
-  if once():                       # default key, for a single setup block
-      run("./fetch-deps")          # fetch a dependency, create a symlink, …
-      run("ln -fs $(pwd)/… …")
-
-  if once("fetch-agent"):          # independent keys → independent markers
-      run("./gradlew :nativesdk:fetchAgent")
-  ```
-
-  Returns True the first time each `key` is seen in the bisect, False after. A
-  key's "already ran" marker (scoped to the bisect id) is committed only once an
-  evaluation that armed it finishes with a real verdict — *not* on abort. Keys
-  committed by an earlier evaluation stay done; every key armed in an evaluation
-  that then aborts re-runs next time (keep each block idempotent). Its artifacts
-  must survive `git checkout` (untracked / outside the tree). Use it for what's
-  the same on every commit; use `run` for what must be rebuilt per commit.
-- **`replace(path, old, new)`** — sed-like edit, auto-reverted. `old` is a literal
-  `str` or a compiled `re.Pattern` (the *type* decides; no `regex=` flag).
-- **`fixup(patch=… | cherry_pick=…, when=…)`** — context manager that applies a
-  patch/cherry-pick for its block, then reverts.
-- **`in_range("v1.0..v2.0")`, `touches("src/x.c")`** — predicates for `when=`.
-
-### Exit-code contract
-
-`bisectlib` maps outcomes to the exit codes `git bisect run` understands:
-
-| Outcome | Exit | Meaning |
-|---------|------|---------|
-| good | `0` | bug absent |
-| bad | `1` | bug present |
-| skip | `125` | commit untestable |
-| abort | `128` | harness broken — bisect state preserved, fix the recipe and re-run |
-
-An uncaught exception in a recipe **aborts** (128) — never misread as "bad".
-
-### Abort → fix the recipe → resume
-
-Abort is the *"my harness is wrong"* signal, and it's designed to be recovered
-from: git keeps the whole bisect state (good/bad/skip refs) when the recipe
-exits ≥128, with the failing commit checked out. Fix the recipe, then **re-run
-the same command** — do *not* run `git bisect start` again, which would reset:
-
-```sh
-git bisect start <bad> <good>
-git bisect run python recipe.py     # aborts on a broken recipe → state kept
-#   … edit recipe.py (add a fixup, set skip_on_error=True, fix a typo) …
-git bisect run python recipe.py     # SAME command → re-tests the current commit and continues
-```
-
-If the abort was really just *this one commit* being untestable (not a recipe
-bug), skip it and carry on instead of changing anything:
-
-```sh
-git bisect skip                 # mark the current aborted commit untestable
-git bisect run python recipe.py # continue — git routes around it
-#   git bisect skip <sha>  /  git bisect skip A..B   # skip a specific commit/range
-```
-
-(To skip *every* unbuildable commit automatically instead of aborting, set
-`skip_on_error=True` on that `run()` step — best for a whole known-bad band,
-whereas `git bisect skip` is best for a one-off.)
-
-## The live status report (`.bisect/status.md`)
-
-As a recipe runs, `bisectlib` writes a Markdown report to **`.bisect/status.md`**
-at the root of the repo you're bisecting. Open it in your editor and leave it
-open — it's a fixed path that updates in place as the bisect progresses, so you
-can watch the range funnel down and see what's running right now without
-touching another terminal.
-
-The report is derived from only `git bisect log` + per-commit information (git
-metadata, plus each commit's `eval.json` sidecar that the recipe records). No
-reflog, no `/proc`, no heuristics — if a fact wasn't recorded, it isn't shown.
-
-```
+````markdown
 # Bisect report
 **original range:** good `2801e9572` · bad `79cb050c2`
 
@@ -213,97 +128,126 @@ Date:   2026-06-15 11:40:00 +0200
 
 | good | bad | midpoint | range | status |
 |------|-----|----------|-------|--------|
-| `2801e9572` 2026-05-28 22:06, Bob | `79cb050c2` 2026-06-24 13:02, Alice | `cb5394973` 2026-06-12 06:06, Carol | 27d 15h · 11 commits | 🟢 good |
-| `cb5394973` 2026-06-12 06:06, Carol | `79cb050c2` 2026-06-24 13:02, Alice | `95345541b` 2026-06-18 09:12, Dan | 12d 7h · 6 commits | 🔴 bad · 81.2s |
-| `cb5394973` 2026-06-12 06:06, Carol | `95345541b` 2026-06-18 09:12, Dan | `5c9dcafb3` 2026-06-15 11:40, Eve | 6d 3h · 3 commits | 🔴 bad |
-| `cb5394973` 2026-06-12 06:06, Carol | `5c9dcafb3` 2026-06-15 11:40, Eve | `19d89b121` 2026-06-13 08:20, Fay | 3d 5h · 2 commits | 🟢 good |
-```
+| `2801e9572` …, Bob | `79cb050c2` …, Alice | `cb5394973` …, Carol | 27d 15h · 11 commits | 🟢 good |
+| `cb5394973` …, Carol | `79cb050c2` …, Alice | `95345541b` …, Dan | 12d 7h · 6 commits | 🔴 bad · 81.2s |
+| `cb5394973` …, Carol | `95345541b` …, Dan | `5c9dcafb3` …, Eve | 6d 3h · 3 commits | 🔴 bad |
+| `cb5394973` …, Carol | `5c9dcafb3` …, Eve | `19d89b121` …, Fay | 3d 5h · 2 commits | 🟢 good |
+````
 
-When the bisect finishes, the report shows the culprit **the way `git bisect`
-does** — the full commit header, message, and diffstat — so you can read the
-verdict without another `git show`. Each row reads in causal order: the **input
-range** (`good`/`bad`) → the **midpoint** git chose → the **status**.
+Each row reads in causal order — the **input range** (`good`/`bad`) → the **midpoint** git
+chose → the **result** — so you see the range funnel down as you scan. The report is
+re-rendered the moment each command *starts*, links every step to its live-streamed log
+under `.bisect/<sha>/`, and — when the search resolves — shows the culprit the way
+`git bisect` does, with the full commit and diffstat. When it's done, you have the answer
+without another `git show`.
 
-`status.md` is (re)written the moment each command **starts**, not just when it
-finishes, so the report always names what is running right now — the in-flight
-commit shows a `⏳ running` step and the top-level row reads `⏳ running \`…\``.
-Each step links to its captured per-commit log under `.bisect/<sha>/`, and that
-log is streamed to disk line by line as the command runs, so you can open it and
-**watch the build/test as it happens** instead of waiting for it to complete.
+> `.bisect/` is registered in the repo's **local** excludes (`.git/info/exclude`, never your
+> tracked `.gitignore`), so it stays out of `git status`, is never committed, and survives
+> the checkouts git does between commits. Point it elsewhere with
+> `configure(logs="…", status_md="…")`.
 
-Each `good`/`bad`/`midpoint` cell is the commit hash plus its **commit date and
-author** (the subject is omitted to keep rows compact); the **range** column is the
-`good..bad` span (duration · commit count).
+## Install
 
-### The `.bisect/` directory
-
-Everything the report needs lives in one directory at the repo root:
-
-```
-<repo>/.bisect/
-  status.md            # the report — pin this tab in your editor
-  <sha>/eval.json      # per-commit recorded facts (steps, timings, verdict)
-  <sha>/NN-run-*.log   # captured, live-streamed command output
-  id                   # bisect identity; a new bisect wipes stale artifacts
-```
-
-It's registered in the repo's **local** excludes (`.git/info/exclude`, never your
-tracked `.gitignore`), so it stays out of `git status`, never gets committed, and
-survives the `git checkout` git does between commits. Starting a *different*
-bisect (new good/bad anchors) clears the previous run's report and logs; resuming
-the same one keeps them (so `once()` setup stays done). Point it elsewhere with
-`configure(logs="…", status_md="…")` if you prefer.
-
-## Install / how a recipe finds `bisectlib`
-
-Your `recipe.py` does `from bisectlib import run, test, …`. Python needs to be able
-to import that module — there are two easy ways:
-
-**1. Install it (recommended for repeated use).**
 ```sh
-pip install -e /path/to/bisectlib   # or: pip install bisectlib
+pip install git+https://github.com/martinus/bisectlib
 ```
-Now `import bisectlib` works from any repo. Just write `recipe.py` and run
-`git bisect run python recipe.py`. The installed package ships a `py.typed`
-marker, so editors/type-checkers resolve `run`, `test`, … without warnings.
-(For an *editable* dev install, add `--config-settings editable_mode=compat` so
-mypy can follow it: `pip install -e . --config-settings editable_mode=compat`.)
 
-**2. Zero-install: drop the `bisectlib/` package next to your recipe.**
-When you run `python recipe.py`, Python puts the recipe's own directory on
-`sys.path`, so a `bisectlib/` folder sitting beside `recipe.py` is imported
-automatically — no install, no `PYTHONPATH`. Copy the `bisectlib/` directory next
-to the recipe; the `.bisect/status.md` report is built in, nothing else to copy.
+That gives you `import bisectlib` for recipes anywhere. It ships a `py.typed` marker, so
+editors and type-checkers resolve `run`, `test`, … with no warnings. To refresh a git
+install to the latest `main`:
 
-> Keep those copies **untracked** in the repo you're bisecting. Untracked files
-> survive `git checkout`, so they persist across every commit of the bisect — but
-> if you *commit* them they'd vanish on older commits (which don't have them) and
-> the import would fail mid-bisect. Untracked = present everywhere, part of nothing.
+```sh
+pip install --force-reinstall git+https://github.com/martinus/bisectlib
+```
 
-(A bare `import bisectlib` without either of the above fails because the package
-isn't on `sys.path` — that's why the tests inject it explicitly.)
+**Zero-install alternative:** running `python recipe.py` puts the recipe's own directory on
+`sys.path`, so just dropping the `bisectlib/` package folder next to `recipe.py` is enough —
+no install, no `PYTHONPATH`. Keep that copy **untracked** in the repo you're bisecting so it
+survives every checkout (commit it and it would vanish on older commits and break the
+import mid-bisect).
 
-Requires Python 3.10+. No third-party dependencies.
+Requires **Python 3.10+**. No third-party dependencies.
+
+## API cheat sheet
+
+```python
+from bisectlib import (run, test, check, once,
+                       good, bad, skip, abort, replace, fixup, in_range, touches)
+```
+
+| Verb | Meaning | On failure |
+|------|---------|------------|
+| `run(cmd, skip_on_error=False)` | infrastructure (configure/build/setup) | **abort** (or skip) |
+| `test(cmd, attempts=1, min_passes=None, passed=None, warmup=0, bad_when="fail")` | the verdict | **bad** |
+| `check(cmd) -> Result` | run once, **never exits** — introspect `.ok`, `.out`, `.seconds` | — |
+| `good()` / `bad()` / `skip()` / `abort()` | decide the commit **directly from Python** | — |
+
+Every verb takes `cwd=` (relative paths resolve against the repo root; `configure(cwd=…)`
+sets a default) and `timeout=`.
+
+- **`once(key="setup")`** — run one-time, commit-independent setup (fetch a dependency,
+  create a symlink) exactly once across the whole bisect instead of on every commit.
+- **`replace(path, old, new)`** — sed-like edit, auto-reverted. `old` is a literal `str` or a
+  compiled `re.Pattern` (the type decides — no `regex=` flag).
+- **`fixup(patch=… | cherry_pick=…, when=…)`** — apply a patch/cherry-pick for a block, then
+  revert.
+- **`in_range("v1.0..v2.0")`, `touches("src/x.c")`** — predicates for `when=`, also usable in
+  a plain `if`.
+
+### The exit-code contract
+
+bisectlib maps outcomes to the exit codes `git bisect run` understands:
+
+| Outcome | Exit | Meaning |
+|---------|------|---------|
+| good | `0` | bug absent |
+| bad | `1` | bug present |
+| skip | `125` | commit untestable — route around it |
+| abort | `128` | harness broken — **bisect state preserved**, fix the recipe and re-run |
+
+An uncaught exception in a recipe **aborts** (128) — it is never misread as "bad."
+
+### Abort → fix the recipe → resume
+
+Abort is the *"my harness is wrong"* signal, and it's built to recover from. git keeps the
+whole bisect state with the failing commit checked out, so you fix the recipe and **re-run
+the same command** — do *not* `git bisect start` again (that resets):
+
+```sh
+git bisect run python recipe.py     # aborts on a broken recipe → state kept
+#   … edit recipe.py: add a fixup, set skip_on_error=True, fix a typo …
+git bisect run python recipe.py     # SAME command → re-tests the current commit and continues
+```
+
+If it was really just *this one commit* being untestable, `git bisect skip` and carry on.
 
 ## Examples
 
-See [`examples/`](examples/):
+Runnable recipes in [`examples/`](examples/):
 
 | File | Shows |
 |------|-------|
 | `minimal.py` | the simplest recipe: build + test |
-| `flaky_with_fixup.py` | flaky test (`attempts`/`min_passes`) + a per-range patch `fixup` |
+| `flaky_with_fixup.py` | a flaky test (`attempts`/`min_passes`) plus a per-range patch `fixup` |
 | `perf_regression.py` | a benchmark verdict via a time-aware `passed` predicate + `replace` |
 | `find_when_fixed.py` | `bad_when="pass"` — find when something started *working* |
-| `bisect_on_output.py` | bisect on output *content* (when a warning appeared) |
+| `bisect_on_output.py` | bisect on output *content* (when a warning first appeared) |
 | `metric_binary_size.py` | a numeric-budget bisect (binary size crossed a threshold) |
 | `build_fix_cherrypick.py` | keep an un-buildable range testable via `fixup(cherry_pick=…)` |
 
-## Development
+## The mental model
 
-```sh
-python -m unittest discover -s tests -v
-```
+A recipe is a normal script that `git bisect run` executes once per commit:
+
+- A **passing step continues** to the next line.
+- A failing **`test()` is bad**; a failing **`run()` aborts** (or skips).
+- **Falling off the end is good.**
+
+Because passing steps continue, listing several `test()` calls just **ANDs** them — every one
+must pass for the commit to count as good. That's the entire thing to remember.
+
+See [`SPEC.md`](SPEC.md) for the full design rationale, and run the tests with
+`python -m unittest discover -s tests -v`.
 
 ## License
 
