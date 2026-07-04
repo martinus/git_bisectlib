@@ -512,6 +512,71 @@ class TestEngine(unittest.TestCase):
         self.assertIn(bug[:9], text)
         sh(d, "git", "bisect", "reset", env=env)
 
+    def test_uncaught_exception_reverts_tree(self):
+        # SPEC §2.2: the tree must be clean even on exception. A recipe that
+        # edits a file then crashes must still ABORT *and* leave no tracked
+        # modification behind — otherwise the edit lingers, and re-running the
+        # fixed recipe finds `replace`'s pattern already gone (silent mis-bisect).
+        d = make_repo()
+        body = ("import bisectlib as b\n"
+                "b.replace('code.txt', 'original', 'patched')\n"
+                "raise RuntimeError('boom')\n")
+        code, _, _ = run_recipe(d, body)
+        self.assertEqual(code, 128)  # ABORT, never bad
+        self.assertEqual(Path(d, "code.txt").read_text(), "original\n")  # reverted
+        self.assertEqual(
+            sh(d, "git", "status", "--porcelain", "--untracked-files=no").stdout.strip(),
+            "")
+
+    def test_invalid_options_abort(self):
+        # A mistyped string option must fail loudly (ABORT), not silently default.
+        # bad_when is the dangerous one: a silent fallback would invert the whole
+        # bisect's direction.
+        d = make_repo()
+        cases = [
+            "b.test('true', bad_when='Pass')",       # typo'd enum
+            "b.test('true', on_timeout='abrot')",    # typo'd enum
+            "b.test('true', attempts=3, min_passes=5)",  # unreachable -> would be silent bad
+            "b.test('true', attempts=0)",            # nonsensical count
+            "b.run('true', on_timeout='nope')",
+            "b.replace('code.txt', 'original', 'x', if_missing='meh')",
+            "b.configure(clean='wipe')",
+            "b.in_range('v1.0...v2.0')",             # three dots
+            "b.in_range('onlyonerev')",              # missing high bound
+        ]
+        for expr in cases:
+            code, _, _ = run_recipe(d, f"import bisectlib as b\n{expr}\n")
+            self.assertEqual(code, 128, f"{expr!r} should ABORT (ValueError)")
+
+    def test_valid_min_passes_boundary_still_works(self):
+        # guard the validator isn't over-eager: min_passes == attempts is valid
+        d = make_repo()
+        code, _, _ = run_recipe(
+            d, "import bisectlib as b\nb.test('true', attempts=3, min_passes=3)\n")
+        self.assertEqual(code, 0)
+
+    def test_custom_logs_dir_wiped_on_new_bisect(self):
+        # configure(logs=…) must get the same new-bisect hygiene as .bisect/: a
+        # stale once() marker from a *different* bisect must not leak in, while an
+        # unrelated user file in that directory is left untouched.
+        import hashlib
+        d = make_repo()
+        logs = tempfile.mkdtemp(prefix="bl-customlogs-")
+        # a stale marker + an unrelated user file pre-populate the dir; the `id`
+        # file names a *different* prior bisect so this run counts as new.
+        stale_marker = f"once-setup-{hashlib.sha1(b'setup').hexdigest()[:8]}"
+        Path(logs, "id").write_text("different-old-bisect-id")
+        Path(logs, stale_marker).write_text("done")  # exact name once('setup') looks for
+        Path(logs, "keep_me.txt").write_text("user data")
+        body = ("import bisectlib as b\n"
+                f"b.configure(logs={logs!r})\n"
+                "assert b.once('setup') is True, 'stale marker leaked'\n"
+                "b.test('true')\n")
+        code, _, _ = run_recipe(d, body)
+        self.assertEqual(code, 0)
+        self.assertTrue(Path(logs, "keep_me.txt").is_file(),
+                        "unrelated user file must not be deleted")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

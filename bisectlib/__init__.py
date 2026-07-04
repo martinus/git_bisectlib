@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 __all__ = [
     "run", "test", "check",                 # the verbs
@@ -89,6 +89,9 @@ def configure(status_md=None, logs=None, clean=None, color=None, cwd=None) -> No
     if logs is not None:
         _cfg.logs = logs
     if clean is not None:
+        if clean not in ("reset", "clean"):
+            raise ValueError(
+                f"clean={clean!r} is not valid; expected 'reset' or 'clean'")
         _cfg.clean = clean
     if color is not None:
         _cfg.color = color
@@ -163,9 +166,18 @@ def _in_range(rev: str, lo: str, hi: str) -> bool:
 def in_range(spec: str, hi: Optional[str] = None):
     """Predicate: is HEAD within [lo, hi]? Accepts ('lo..hi') or (lo, hi)."""
     if hi is None and ".." in spec:
+        if "..." in spec:
+            raise ValueError(
+                f"in_range({spec!r}): use two dots 'lo..hi', not three "
+                f"(three-dot is git's symmetric-difference syntax, not a range)")
         lo, hi = spec.split("..", 1)
     else:
         lo = spec
+    if not lo or not hi:
+        raise ValueError(
+            f"in_range({spec!r}"
+            + (f", {hi!r}" if hi is not None else "")
+            + "): need both a low and a high revision, e.g. in_range('v1.0..v2.0')")
     return _Range(lo, hi)
 
 
@@ -355,6 +367,23 @@ def _bisect_id() -> str:
 # or gets committed, and `git checkout` between commits leaves it untouched.
 _DIRNAME = ".bisect"
 _session_ready = False
+_SHA_DIR_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _owned_entry(child: Path) -> bool:
+    """True if `child` is something bisectlib itself created in the logs dir.
+
+    Used to scope the new-bisect wipe to our own files (`status.md`, `once-*`
+    markers, per-commit `<sha>/` dirs) so pointing ``configure(logs=…)`` at a
+    shared or pre-populated directory never deletes the user's unrelated files.
+    The `id` marker is preserved by the caller, not here.
+    """
+    name = child.name
+    if name == "status.md" or name.startswith("once-"):
+        return True
+    if child.is_dir() and (_SHA_DIR_RE.match(name) or name == "unknown"):
+        return True
+    return False
 
 
 def _bisect_root() -> Path:
@@ -408,8 +437,6 @@ def _ensure_session() -> None:
         return
     _session_ready = True
     _register_exclude()
-    if _cfg.logs:
-        return
     root = _bisect_root()
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -417,8 +444,12 @@ def _ensure_session() -> None:
         cur = _bisect_id()
         prev = idfile.read_text().strip() if idfile.exists() else None
         if prev != cur:
+            # A different bisect (repo + original good/bad anchors changed): drop
+            # the previous run's report, logs and once() markers so they don't
+            # leak in. Only our own entries are removed — safe even when
+            # configure(logs=…) points at a shared/pre-populated directory.
             for child in root.iterdir():
-                if child.name == "id":
+                if child.name == "id" or not _owned_entry(child):
                     continue
                 if child.is_dir():
                     shutil.rmtree(child, ignore_errors=True)
@@ -492,6 +523,20 @@ def abort(msg: str = "") -> "NoReturn":  # type: ignore[name-defined]
 
 
 # -------------------------------------------------------------------- run/test
+def _one_of(name: str, value: str, allowed: tuple[str, ...]) -> None:
+    """Fail fast on a mistyped string option instead of silently defaulting.
+
+    A typo like ``bad_when="Pass"`` or ``on_timeout="abrot"`` used to fall
+    through to a default — for ``bad_when`` that silently inverts the whole
+    bisect. Since this library's whole point is never to be silently wrong, an
+    unknown value raises (an uncaught error in a recipe ABORTS, never 'bad').
+    """
+    if value not in allowed:
+        raise ValueError(
+            f"{name}={value!r} is not valid; expected one of "
+            + ", ".join(repr(a) for a in allowed))
+
+
 def _slug(cmd: str, maxlen: int = 40) -> str:
     """A short, filesystem-safe label derived from a command, for log filenames.
 
@@ -510,8 +555,7 @@ def _slug(cmd: str, maxlen: int = 40) -> str:
 
 
 def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = None,
-        on_timeout: str = "abort", cwd: Optional[str] = None,
-        name: Optional[str] = None) -> Result:
+        on_timeout: str = "abort", cwd: Optional[str] = None) -> Result:
     """Infrastructure step (configure/build/setup).
 
     Success -> continue. Failure -> ABORT by default (the harness is presumed
@@ -521,6 +565,7 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
     ``cwd`` sets the working directory (relative to the repo root; absolute paths
     honoured); defaults to the repo root or ``configure(cwd=…)``.
     """
+    _one_of("on_timeout", on_timeout, ("abort", "skip", "bad"))
     _echo_start("run", cmd)
     log_name = f"{len(_steps)+1:02d}-run-{_slug(cmd)}.log"
     _begin_step("run", cmd, log_name)
@@ -547,8 +592,7 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
 def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
          passed: Optional[Callable[[Result], bool]] = None, warmup: int = 0,
          bad_when: str = "fail", timeout: Optional[float] = None,
-         on_timeout: str = "skip", cwd: Optional[str] = None,
-         name: Optional[str] = None) -> Optional[Result]:
+         on_timeout: str = "skip", cwd: Optional[str] = None) -> Optional[Result]:
     """A verdict step. Good -> continue; bad -> exit 1 (BAD).
 
     Like ``run``, a *passing* test continues to the next line, so you can have
@@ -581,6 +625,16 @@ def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
     bad would silently mis-bisect. (A crash/signal, exit ``>=128``, stays BAD — it
     may be the regression itself.)
     """
+    _one_of("bad_when", bad_when, ("fail", "pass"))
+    _one_of("on_timeout", on_timeout, ("skip", "bad", "abort"))
+    if attempts < 1:
+        raise ValueError(f"attempts={attempts!r} must be >= 1")
+    if warmup < 0:
+        raise ValueError(f"warmup={warmup!r} must be >= 0")
+    if min_passes is not None and not (1 <= min_passes <= attempts):
+        raise ValueError(
+            f"min_passes={min_passes!r} must be between 1 and attempts={attempts} "
+            f"(min_passes>attempts is unreachable -> always bad)")
     _echo_start("test", cmd)
     if passed is None:
         passed = lambda r: r.ok  # noqa: E731
@@ -738,6 +792,7 @@ def replace(path: str, old: Union[str, "re.Pattern"], new: str, *,
     `old` is a literal substring (str) or a regex (re.Pattern); type decides.
     `if_missing`: "skip" (default), "abort", or "ignore" when `old` isn't found.
     """
+    _one_of("if_missing", if_missing, ("skip", "abort", "ignore"))
     if when is not None and not _truthy(when):
         return
     p = Path(_toplevel()) / path if not os.path.isabs(path) else Path(path)
@@ -902,10 +957,21 @@ def _finalize() -> None:
 
 
 def _excepthook(exc_type, exc, tb):
-    """An uncaught error in a recipe is a harness bug -> ABORT, never 'bad'."""
+    """An uncaught error in a recipe is a harness bug -> ABORT, never 'bad'.
+
+    Finalize by hand first: `os._exit` below skips the atexit-registered
+    `_finalize`, so without this any `fixup`/`replace` edit would be left in the
+    tree (violating the clean-tree guarantee — SPEC §2.2) and status.md would
+    stay stuck on the in-flight step. `_finalize` reverts edits, records the
+    abort, and does *not* commit any armed `once()` markers (code == ABORT).
+    """
     import traceback
     traceback.print_exception(exc_type, exc, tb)
     _final["outcome"], _final["code"] = "abort", ABORT
+    try:
+        _finalize()
+    except Exception:
+        pass  # never let cleanup mask the original error or block the exit
     os._exit(ABORT)
 
 
