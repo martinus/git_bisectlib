@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bisectlib"
+name = "git-bisectlib"
 version = "0.13.0"
 description = "Write tiny git bisect recipes in Python; watch progress live in .bisect/status.md."
 readme = "README.md"
