@@ -224,7 +224,10 @@ the outcome — `run` defaults to `abort`, `test` to `skip`.
 
 Mistyped a string option (`bad_when="Pass"`, `on_timeout="abrot"`) or an impossible
 `min_passes`? The verb raises immediately — which **aborts** the bisect with a clear
-message rather than silently defaulting and quietly bisecting in the wrong direction.
+message rather than silently defaulting and quietly bisecting in the wrong direction. The
+fixed-choice options (`bad_when`, `on_timeout`, `if_missing`, `clean`) are typed with
+`Literal`, so your editor autocompletes the valid values and a type-checker flags a typo
+before you even run — no enum import, you still just write `on_timeout="bad"`.
 
 ### The exit-code contract
 

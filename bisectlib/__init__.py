@@ -48,9 +48,16 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Literal, Optional, Union
 
-__version__ = "0.14.0"
+# Small closed sets of string options, typed so editors autocomplete the choices
+# and type-checkers reject a typo *before* the recipe runs (the runtime `_one_of`
+# check still guards callers without a type-checker). Chosen over an Enum to keep
+# recipes terse — `on_timeout="bad"`, no import, no `OnTimeout.BAD` ceremony.
+_BadWhen = Literal["fail", "pass"]
+_OnTimeout = Literal["abort", "skip", "bad"]
+
+__version__ = "0.14.1"
 
 __all__ = [
     "run", "test", "hammer", "check",       # the verbs
@@ -85,7 +92,9 @@ _finalized = False
 _once_pending: set[str] = set()
 
 
-def configure(status_md=None, logs=None, clean=None, color=None, cwd=None) -> None:
+def configure(status_md=None, logs=None,
+              clean: Optional[Literal["reset", "clean"]] = None,
+              color=None, cwd=None) -> None:
     if status_md is not None:
         _cfg.status_md = status_md
     if logs is not None:
@@ -564,7 +573,7 @@ def _slug(cmd: str, maxlen: int = 40) -> str:
 
 
 def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = None,
-        on_timeout: str = "abort", cwd: Optional[str] = None) -> Result:
+        on_timeout: _OnTimeout = "abort", cwd: Optional[str] = None) -> Result:
     """Infrastructure step (configure/build/setup).
 
     Success -> continue. Failure -> ABORT by default (the harness is presumed
@@ -600,8 +609,8 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
 
 def test(cmd: str, *, attempts: int = 1, min_passes: Optional[int] = None,
          passed: Optional[Callable[[Result], bool]] = None, warmup: int = 0,
-         bad_when: str = "fail", timeout: Optional[float] = None,
-         on_timeout: str = "skip", cwd: Optional[str] = None) -> Optional[Result]:
+         bad_when: _BadWhen = "fail", timeout: Optional[float] = None,
+         on_timeout: _OnTimeout = "skip", cwd: Optional[str] = None) -> Optional[Result]:
     """A verdict step. Good -> continue; bad -> exit 1 (BAD).
 
     Like ``run``, a *passing* test continues to the next line, so you can have
@@ -733,8 +742,8 @@ def _hammer_log(fh, n: int, kind: str, res: Result) -> None:
 
 def hammer(cmd: str, *, for_seconds: float = 60.0, parallel: Optional[int] = None,
            passed: Optional[Callable[[Result], bool]] = None,
-           bad_when: str = "fail", timeout: Optional[float] = None,
-           on_timeout: str = "skip", cwd: Optional[str] = None) -> Optional[Result]:
+           bad_when: _BadWhen = "fail", timeout: Optional[float] = None,
+           on_timeout: _OnTimeout = "skip", cwd: Optional[str] = None) -> Optional[Result]:
     """Hunt a rare flake: run ``cmd`` over and over until one fails.
 
     The mirror image of the flaky-*tolerant* ``test(attempts=…, min_passes=…)``.
@@ -970,7 +979,8 @@ def _record_step(verb, cmd, res: Optional[Result], ok, extra=None, outcome=None,
 
 # -------------------------------------------------------------------- replace
 def replace(path: str, old: Union[str, "re.Pattern"], new: str, *,
-            count: int = 0, when=None, if_missing: str = "skip") -> None:
+            count: int = 0, when=None,
+            if_missing: Literal["skip", "abort", "ignore"] = "skip") -> None:
     """sed-like in-file edit, auto-reverted before the process exits.
 
     `old` is a literal substring (str) or a regex (re.Pattern); type decides.
