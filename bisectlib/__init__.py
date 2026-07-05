@@ -33,8 +33,9 @@ Verbs:
 
 Guided mode (automatic): while a bisect is started with a bad commit but no good
 one yet, running `python recipe.py` by hand prints the copy-pasteable next step —
-older candidate commits to try (distance doubling) until you find the good anchor,
-then the `git bisect run` hand-off. It's silent during a real `git bisect run`.
+older candidate commits to try (doubling the number of commits skipped) until you
+find the good anchor, then the `git bisect run` hand-off. A commit that won't build
+offers a direction choice rather than a verdict. Silent during real `git bisect run`.
 """
 from __future__ import annotations
 
@@ -687,49 +688,65 @@ def _guided_state() -> dict:
     return _guided
 
 
-def _candidate_commits(n: int = 3) -> list:
-    """Older commits to try next while hunting for a good one, each roughly double
-    the distance back through history. Returns (short, date, subject, days) tuples.
+def _commit_meta(rev: str):
+    """(full_sha, short, date, subject) for a rev, or None if it doesn't resolve.
 
-    The step size doubles from what's already been searched: if HEAD sits `d` days
-    before the newest bad commit, the next probes are ~2d, 4d, 8d back (and the
-    very first hunt, d≈0, starts at 1 week → 1w, 2w, 4w). Commits are resolved by
-    date on the bad commit's ancestry, so they're always valid bisect candidates.
+    ``date`` is the committer date (``%cs`` = YYYY-MM-DD) so the guidance can show
+    *when* a candidate commit is even though the search now steps by commit count.
     """
+    full = _git("rev-parse", "--verify", f"{rev}^{{commit}}", check=False)
+    if not full:
+        return None
+    try:
+        short, date, subject = _git(
+            "show", "-s", "--format=%h%x09%cs%x09%s", full).split("\t", 2)
+    except (RuntimeError, ValueError):
+        return (full, full[:9], "", "")
+    return (full, short, date, subject)
+
+
+def _searched_depth() -> int:
+    """How many commits back from HEAD we've already ruled bad — the number of
+    commits between HEAD and the newest known-bad anchor (0 on the first hunt)."""
     g = _guided_state()
     anchor, head = g.get("anchor"), g.get("head")
-    if not anchor:
+    if not (anchor and head):
+        return 0
+    c = _git("rev-list", "--count", f"{head}..{anchor}", check=False)
+    return int(c) if c.isdigit() else 0
+
+
+def _candidate_commits(n: int = 3) -> list:
+    """Older commits to try next while hunting for a good one, each doubling the
+    number of commits skipped. Returns (short, date, subject, dist) tuples where
+    ``dist`` is how many commits back from HEAD the candidate is.
+
+    Commit count — not calendar time — is the metric that governs bisect (it sets
+    the number of steps), and commit density is far too uneven for time to be a
+    good proxy. So the probes step back by commit count and double each time:
+    HEAD~s, HEAD~2s, HEAD~4s, where ``s`` is the depth already searched (1 on the
+    first hunt → parent, then 2, 4, …). Walking first-parent keeps probes on the
+    mainline and always yields a valid ancestor to bisect from; a probe past the
+    root of history is simply dropped.
+    """
+    g = _guided_state()
+    head = g.get("head")
+    if not head:
         return []
-    try:
-        anchor_ts = int(_git("show", "-s", "--format=%ct", anchor))
-    except (RuntimeError, ValueError):
-        return []
-    d_days = 0.0
-    try:
-        head_ts = int(_git("show", "-s", "--format=%ct", head))
-        d_days = max(0.0, (anchor_ts - head_ts) / 86400.0)
-    except (RuntimeError, ValueError):
-        pass
-    step = 7.0 if d_days < 7.0 else d_days * 2.0
+    step = max(1, _searched_depth())
     out: list = []
-    seen = {head, anchor}
+    seen: set = set()
+    dist = step
     tries = 0
     while len(out) < n and tries < n + 8:
         tries += 1
-        days = step
-        step *= 2.0
-        target = anchor_ts - days * 86400.0
-        iso = datetime.fromtimestamp(target, tz=timezone.utc).isoformat()
-        sha_ = _git("rev-list", "-1", f"--before={iso}", anchor, check=False)
-        if not sha_ or sha_ in seen:
+        this, dist = dist, dist * 2
+        meta = _commit_meta(f"{head}~{this}")
+        if not meta or meta[0] in seen:
             continue  # off the end of history, or same commit as a nearer probe
-        seen.add(sha_)
-        try:
-            short, date, subject = _git(
-                "show", "-s", "--format=%h%x09%cs%x09%s", sha_).split("\t", 2)
-        except (RuntimeError, ValueError):
-            short, date, subject = sha_[:9], "", ""
-        out.append((short, date, subject, int(round(days))))
+        seen.add(meta[0])
+        _, short, date, subject = meta
+        out.append((short, date, subject, this))
     return out
 
 
@@ -776,10 +793,12 @@ def _g_candidate_lines() -> list:
                 _g_text("best bet for GOOD. Check it out; if the recipe passes there,"),
                 _g_text("run `git bisect good`.")]
     lines = []
-    for short, date, subject, days in cands:
-        subj = (subject[:44] + "…") if len(subject) > 45 else subject
+    for short, date, subject, dist in cands:
+        subj = (subject[:40] + "…") if len(subject) > 41 else subject
         meta = " ".join(x for x in (date, subj) if x)
-        tail = f"{meta}  (~{days}d before bad)" if meta else f"~{days}d before bad"
+        plural = "commit" if dist == 1 else "commits"
+        tail = (f"{meta}  ({dist} {plural} back)" if meta
+                else f"{dist} {plural} back")
         lines.append(_g_cmd(f"git checkout {short}", tail))
     return lines
 
@@ -813,11 +832,10 @@ def _guided_print(kind: str) -> None:
                  ("●", f"SKIP — this commit can't be tested ({short}).", "skip"), [
             _g_text("Try an older commit instead:"),
             _CANDIDATES, "", _RERUN]),
-        "abort": ("build/setup failed — fix the recipe", "abort",
-                  ("⚠", "The build or setup step failed.", "abort"), [
-            _g_text("That's an infrastructure problem, not a good/bad verdict — git"),
-            _g_text("bisect would be misled if this counted as a result."),
-            _g_text("Fix your build script (the recipe), then run it again:"),
+        "abort": ("recipe error — fix the recipe", "abort",
+                  ("⚠", "The recipe hit an error — not a good/bad verdict.", "abort"), [
+            _g_text("This is a harness problem, not evidence about the bug. Fix the"),
+            _g_text("recipe, then run it again:"),
             "",
             _g_cmd(recipe)]),
         "already_bad": ("already marked bad — skipping", "skip",
@@ -839,6 +857,56 @@ def _guided_print(kind: str) -> None:
         else:
             lines.append(item)
     lines.append(_g_rule("", _C[rule_color]))
+    sys.stderr.write("\n" + "\n".join(lines) + "\n")
+    sys.stderr.flush()
+
+
+def _g_checkout(rev: str, note: str) -> Optional[str]:
+    """A `git checkout` line for `rev` prefixed with a direction note, or None."""
+    meta = _commit_meta(rev)
+    if not meta:
+        return None
+    _, short, date, subject = meta
+    subj = (subject[:34] + "…") if len(subject) > 35 else subject
+    tail = " ".join(x for x in (date, subj) if x)
+    return _g_cmd(f"git checkout {short}", f"{note} — {tail}" if tail else note)
+
+
+def _guided_build_break() -> None:
+    """A build/setup ``run()`` failed while hunting for a good commit.
+
+    An unbuildable commit is genuinely untestable, and *why* it won't build is a
+    judgement call this library can't make: it may be toolchain drift on an old
+    commit (jump past it, or come back to newer code that builds) or a bug in the
+    recipe itself. So instead of guessing a direction — or worse, mis-recording it
+    as good/bad — we lay out the choices with copy-pasteable commands and let the
+    user decide which way to continue.
+    """
+    short = (_guided.get("head") or "")[:9]
+    recipe = f"python {sys.argv[0] or 'recipe.py'}"
+    cmd = _final.get("abort_cmd", "")
+    color = _C["abort"]
+    what = f"`{cmd}` failed at {short}" if cmd else f"the build failed at {short}"
+    lines = [_g_rule("can't build this commit — you decide where to go", color),
+             _g_head("⚠", f"{what} — this commit won't build.", color),
+             _g_text("An unbuildable commit is neither good nor bad; nothing was"),
+             _g_text("recorded. Choose a direction and re-run:"),
+             ""]
+    older = _g_checkout(f"{_guided.get('head')}~{max(1, _searched_depth())}",
+                        "OLDER, jump past the break")
+    lines.append(older or _g_text("(no older commit — you're at the start of history)"))
+    depth = _searched_depth()
+    if depth >= 2:
+        newer = _g_checkout(f"{_guided.get('anchor')}~{depth // 2}",
+                            "NEWER, likelier to build")
+        if newer:
+            lines.append(newer)
+    lines += ["", _g_cmd(recipe, "run again after checking out"), "",
+              _g_text("If instead the recipe/build script is what's broken (not the"),
+              _g_text("commit), fix it and re-run — or let the recipe route around"),
+              _g_text("unbuildable commits with:"),
+              _g_cmd('run("…", skip_on_error=True)'),
+              _g_rule("", color)]
     sys.stderr.write("\n" + "\n".join(lines) + "\n")
     sys.stderr.flush()
 
@@ -873,7 +941,13 @@ def _guided_finish() -> None:
     if g["head_is_bad"] and not g["force"]:
         _guided_print("already_bad")
         return
-    kind = {GOOD: "good", BAD: "bad", SKIP: "skip", ABORT: "abort"}.get(_final.get("code"))
+    code = _final.get("code")
+    # A failed build/setup run() is a special abort: the commit is untestable and
+    # the user, not us, should choose which way to continue the hunt.
+    if code == ABORT and _final.get("abort_reason") == "build":
+        _guided_build_break()
+        return
+    kind = {GOOD: "good", BAD: "bad", SKIP: "skip", ABORT: "abort"}.get(code)
     if kind:
         _guided_print(kind)
 
@@ -950,6 +1024,9 @@ def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = Non
         _decide(SKIP)
     else:
         _echo_result("run", cmd, False, res.seconds, "abort")
+        # Note *why* we aborted so guided mode can distinguish a commit that won't
+        # build (the user picks a direction) from a broken recipe (fix it).
+        _final["abort_reason"], _final["abort_cmd"] = "build", cmd
         _decide(ABORT)
 
 

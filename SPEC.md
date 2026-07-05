@@ -333,12 +333,22 @@ trigger; there is deliberately **no** fragile "am I running under `git bisect ru
   - **good** → "you found the good end": `git bisect good` then `git bisect run python recipe.py`.
   - **bad** → `git bisect bad`, then a few older candidate commits to `git checkout` and re-run.
   - **skip** → older candidates to try instead.
-  - **abort** (a failed `run()` / uncaught error) → "fix your **build script**" — explicitly
-    *not* a good/bad verdict, upholding §2.1's infrastructure-vs-result distinction.
-- **Candidate commits double the distance.** Anchored at the newest known-bad commit's date,
-  probes step back by ~2× the distance already searched (first hunt: ~1w, 2w, 4w). Each is
-  resolved by date on the bad commit's ancestry (`git rev-list -1 --before=<date> <bad>`), so
-  it is always a valid bisect candidate; probes that fall off the start of history are dropped.
+  - **abort — recipe error** (uncaught exception, unrunnable test) → "fix the recipe"; *not* a
+    good/bad verdict, upholding §2.1's infrastructure-vs-result distinction.
+  - **abort — build failure** (a `run()` command exited non-zero) → a commit that won't build
+    is untestable, and *why* (toolchain drift on an old commit vs. a broken recipe) is a
+    judgement the library can't make. So instead of guessing it presents a **direction
+    choice**: an **older** commit (jump past the break) and a **newer** one (back toward code
+    that builds), plus the reminder that a broken recipe can be fixed or made to route around
+    the commit with `run(…, skip_on_error=True)`. The user decides — the library never marks
+    the commit or moves HEAD.
+- **Candidate commits double the commit count.** Commit count — not calendar time — is what
+  governs a bisect (it sets the number of steps), and commit density is too uneven for time to
+  be a good proxy. Probes step back by commit count and double: `HEAD~s`, `HEAD~2s`, `HEAD~4s`,
+  where `s` is the depth already searched (`git rev-list --count HEAD..<newest-bad>`; 1 on the
+  first hunt). Walking first-parent keeps probes on the mainline and always yields a valid
+  ancestor to bisect from; a probe past the root of history is dropped. Each candidate is shown
+  with its committer date for orientation.
 
 ---
 
