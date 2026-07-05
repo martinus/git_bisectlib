@@ -271,23 +271,25 @@ python recipe.py          # ← run the recipe yourself
 ```
 
 Because HEAD is already known-bad, the recipe **doesn't waste time re-testing it** — it
-points you at older commits instead (each roughly **doubling** the distance back: ~1 week,
-~2 weeks, ~1 month, …), with copy-pasteable commands:
+points you at older commits instead. Each probe **doubles the number of commits skipped** (its
+parent, then 2, 4, 8, … commits back — commit count, not calendar time, is what governs a
+bisect), with the commit's date shown for orientation and copy-pasteable commands:
 
 ```text
 ━━━ already marked bad — skipping ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ● HEAD (11be95b6e) is already marked BAD — nothing to test here.
   To find a GOOD commit, check out an older one and run the recipe there:
-    git checkout 703164b   # 2024-04-21 commit 37  (~7d before bad)
-    git checkout 66eedd4   # 2024-04-15 commit 35  (~14d before bad)
-    git checkout 0dffdd7   # 2024-03-31 commit 30  (~28d before bad)
+    git checkout 703164b   # 2024-04-21 commit 39: fix cache eviction   (1 commit back)
+    git checkout 66eedd4   # 2024-04-18 commit 38: refactor loader      (2 commits back)
+    git checkout 0dffdd7   # 2024-04-11 commit 36: bump deps            (4 commits back)
 
     python recipe.py       # run again after checking out
 ```
 
-Check out one and run again. If the bug is **still there**, the recipe says so and offers the
-next (doubled) batch of even older candidates — mark it `git bisect bad` and keep going. The
-moment you land on a commit where the bug is **gone**, it hands the search back to git:
+Check out one and run again — pick the farthest to gallop, or a nearer one to tread carefully.
+If the bug is **still there**, the recipe says so and offers the next (doubled) batch of even
+older candidates — mark it `git bisect bad` and keep going. The moment you land on a commit
+where the bug is **gone**, it hands the search back to git:
 
 ```text
 ━━━ found a good commit ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -303,8 +305,23 @@ From here it's the normal automated bisect. A few things worth knowing:
 - **It's the same recipe, unchanged.** Guidance activates *only* while a bisect is started
   but has no good commit yet. During the real `git bisect run` (both endpoints known) and
   during a pre-start smoke test (no bisect at all) it stays completely silent.
-- **A broken build still aborts.** If a candidate doesn't build, `run()` aborts as always and
-  tells you to **fix the build script** — it is never mistaken for a good/bad verdict.
+- **A candidate that won't build is your call.** Old commits often don't build (toolchain
+  drift), and that's neither good nor bad. Rather than guess, the recipe lays out the
+  directions and lets **you** choose — jump **older** past the broken range, or come back
+  **newer** toward code that builds — and reminds you that if it's the *recipe* that's broken
+  you can fix it or set `run(…, skip_on_error=True)`:
+
+  ```text
+  ━━━ can't build this commit — you decide where to go ━━━━━━━━━━━━━━━━━━━━
+    ⚠ `cmake --build build` failed at 2addbb8b — this commit won't build.
+    An unbuildable commit is neither good nor bad; nothing was
+    recorded. Choose a direction and re-run:
+
+      git checkout 9b0f340   # OLDER, jump past the break — 2024-01-07 commit 2
+      git checkout 39b9fba   # NEWER, likelier to build  — 2024-04-03 commit 31
+
+      python recipe.py       # run again after checking out
+  ```
 - **`--force`** re-evaluates the current commit even when it's already marked bad:
   `python recipe.py --force`.
 

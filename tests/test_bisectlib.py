@@ -908,23 +908,52 @@ class TestGuided(unittest.TestCase):
         self.assertIn("git bisect bad", err)
         self.assertIn("git checkout", err)
 
-    def test_infra_failure_says_fix_the_build(self):
-        # A failing run() aborts (128) — an infrastructure problem, not a verdict.
+    def test_infra_failure_offers_a_direction_choice(self):
+        # A failing run() aborts (128). An unbuildable commit is neither good nor
+        # bad, so guided mode hands the direction decision to the user rather than
+        # guessing — offering older/newer commits and a re-run, not a verdict.
+        d, shas = make_history_repo()
+        self.start_bad(d)
+        sh(d, "git", "checkout", "-q", shas[20])       # 19 commits back from bad
+        code, err = run_guided(d, self.INFRA)
+        self.assertEqual(code, 128)
+        self.assertIn("won't build", err)
+        self.assertIn("OLDER", err)
+        self.assertIn("NEWER", err)                    # both directions available
+        self.assertIn("skip_on_error=True", err)       # the recipe-side escape hatch
+
+    def test_recipe_error_is_distinct_from_a_build_break(self):
+        # An uncaught error is a recipe bug, not an unbuildable commit — so it says
+        # "fix the recipe", never the build-break direction menu.
         d, shas = make_history_repo()
         self.start_bad(d)
         sh(d, "git", "checkout", "-q", shas[20])
-        code, err = run_guided(d, self.INFRA)
+        code, err = run_guided(
+            d, "import bisectlib as b\nb.check('true')\nraise RuntimeError('boom')\n")
         self.assertEqual(code, 128)
-        self.assertIn("build", err.lower())
-        self.assertIn("fix your build script", err.lower())
+        self.assertIn("fix the recipe", err.lower())
+        self.assertNotIn("won't build", err)
 
-    def test_candidates_double_the_distance(self):
-        # First hunt (HEAD == the bad commit): probes start at ~1 week and double.
+    def test_build_break_at_anchor_offers_only_older(self):
+        # --force lets a build break happen on the bad anchor itself (depth 0): there
+        # is no "newer" commit inside an empty bad range, so only OLDER is offered.
+        d, _ = make_history_repo()
+        self.start_bad(d)
+        code, err = run_guided(d, self.INFRA, "--force")
+        self.assertEqual(code, 128)
+        self.assertIn("won't build", err)
+        self.assertIn("OLDER", err)
+        self.assertNotIn("NEWER", err)
+
+    def test_candidates_double_the_commit_count(self):
+        # First hunt (HEAD == the bad commit): probes step back by commit count and
+        # double — the parent, then 2, then 4 commits back — each shown with a date.
         d, _ = make_history_repo()
         self.start_bad(d)
         _, err = run_guided(d, self.GOOD)
-        days = [int(m) for m in re.findall(r"~(\d+)d before bad", err)]
-        self.assertEqual(days, [7, 14, 28])
+        dist = [int(m) for m in re.findall(r"\((\d+) commits? back\)", err)]
+        self.assertEqual(dist, [1, 2, 4])
+        self.assertRegex(err, r"\d{4}-\d{2}-\d{2}")    # dates shown alongside
 
     def test_silent_when_good_is_known(self):
         # Once a good commit exists, git is doing the real binary search — guided
