@@ -324,9 +324,7 @@ def build_report(
         shas.update([r.bad, r.good, r.midpoint])
     shas.update([orig_bad, current_bad, current_good, *orig_goods])
     shas.discard(None)
-    subjects = _commit_subjects(repo, shas)
-    dates = _commit_dates(repo, shas)
-    authors = _commit_authors(repo, shas)
+    subjects, dates, authors = _commit_meta(repo, shas)
 
     # Fill range metrics + sidecars per row.
     for r in rows:
@@ -382,32 +380,25 @@ def build_report(
 
 
 # ------------------------------------------------------------- commit metadata
-def _commit_subjects(repo: str, shas) -> dict[str, str]:
-    out: dict[str, str] = {}
+def _commit_meta(repo: str, shas) -> tuple[dict, dict, dict]:
+    """Subject, ISO date and author for each sha, in a single `git show` apiece.
+
+    Replaces three separate per-sha calls (subject/date/author) with one — a
+    third of the git spawns per render, and the report re-renders after every
+    step. `%s` is always a single line, so splitting the output is unambiguous.
+    """
+    subjects: dict[str, str] = {}
+    dates: dict[str, str] = {}
+    authors: dict[str, str] = {}
     for sha in shas:
         if not sha:
             continue
-        s = git(repo, "show", "-s", "--format=%s", sha, check=False)
-        out[sha] = s
-    return out
-
-
-def _commit_dates(repo: str, shas) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for sha in shas:
-        if not sha:
-            continue
-        out[sha] = git(repo, "show", "-s", "--format=%cI", sha, check=False)
-    return out
-
-
-def _commit_authors(repo: str, shas) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for sha in shas:
-        if not sha:
-            continue
-        out[sha] = git(repo, "show", "-s", "--format=%an", sha, check=False)
-    return out
+        out = git(repo, "show", "-s", "--format=%s%n%cI%n%an", sha, check=False)
+        parts = out.split("\n", 2)
+        subjects[sha] = parts[0] if len(parts) > 0 else ""
+        dates[sha] = parts[1] if len(parts) > 1 else ""
+        authors[sha] = parts[2] if len(parts) > 2 else ""
+    return subjects, dates, authors
 
 
 def _parse_iso(s: str) -> datetime:

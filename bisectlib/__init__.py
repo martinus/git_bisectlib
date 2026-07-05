@@ -46,9 +46,9 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Literal, NoReturn, Optional, Union
 
 # Small closed sets of string options, typed so editors autocomplete the choices
 # and type-checkers reject a typo *before* the recipe runs (the runtime `_one_of`
@@ -57,7 +57,7 @@ from typing import Callable, Literal, Optional, Union
 _BadWhen = Literal["fail", "pass"]
 _OnTimeout = Literal["abort", "skip", "bad"]
 
-__version__ = "0.14.1"
+__version__ = "0.14.2"
 
 __all__ = [
     "run", "test", "hammer", "check",       # the verbs
@@ -328,6 +328,14 @@ def _exec(cmd: str, timeout: Optional[float], log_path: Optional[Path],
             pass
         proc.wait()
     pump.join()
+    # Close the pipe explicitly rather than leaving it for GC: a `hammer` fires
+    # thousands of _exec calls, and one leaked read-fd apiece would march toward
+    # the process's open-file limit.
+    try:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    except OSError:
+        pass
     if log_fh is not None:
         try:
             log_fh.close()
@@ -497,14 +505,14 @@ def _commit_log_dir() -> Path:
 
 
 # --------------------------------------------------------------------- verdict
-def _decide(outcome_code: int, reason: str = "") -> "NoReturn":  # type: ignore[name-defined]
+def _decide(outcome_code: int) -> NoReturn:
     """Record the verdict and exit the process with the bisect exit code."""
     _final["outcome"] = _OUTCOME_NAME[outcome_code]
     _final["code"] = outcome_code
     sys.exit(outcome_code)
 
 
-def _verdict(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+def _verdict(code: int, msg: str) -> NoReturn:
     label = _OUTCOME_NAME[code]
     if _use_color():
         sys.stderr.write(f"{_C.get(label, '')}● {label}{_C['reset']} {msg}\n")
@@ -520,22 +528,22 @@ def _verdict(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
 #     if size > 5 * 1024 * 1024:
 #         bad("binary too big")
 # Each exits the process immediately; reaching the end of the recipe is good.
-def good(msg: str = "") -> "NoReturn":   # type: ignore[name-defined]
+def good(msg: str = "") -> NoReturn:
     """Declare this commit GOOD (exit 0) now — short-circuit the rest of the recipe."""
     _verdict(GOOD, msg)
 
 
-def bad(msg: str = "") -> "NoReturn":    # type: ignore[name-defined]
+def bad(msg: str = "") -> NoReturn:
     """Declare this commit BAD (exit 1) now — the bug is present."""
     _verdict(BAD, msg)
 
 
-def skip(msg: str = "") -> "NoReturn":   # type: ignore[name-defined]
+def skip(msg: str = "") -> NoReturn:
     """SKIP this commit (exit 125) — it can't be judged, route around it."""
     _verdict(SKIP, msg)
 
 
-def abort(msg: str = "") -> "NoReturn":  # type: ignore[name-defined]
+def abort(msg: str = "") -> NoReturn:
     """ABORT the bisect (exit 128) — harness broken; state kept, fix & resume."""
     _verdict(ABORT, msg)
 
@@ -555,6 +563,16 @@ def _one_of(name: str, value: str, allowed: tuple[str, ...]) -> None:
             + ", ".join(repr(a) for a in allowed))
 
 
+def _slugify(text: str, maxlen: int = 40, fallback: str = "cmd") -> str:
+    """Lowercase `text`, collapse runs of non-alphanumerics to single dashes, and
+    cap at `maxlen` (trimming a dangling dash). Shared by log-file names and the
+    once() markers so both stay filesystem-safe the same way."""
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if len(s) > maxlen:
+        s = s[:maxlen].rstrip("-")
+    return s or fallback
+
+
 def _slug(cmd: str, maxlen: int = 40) -> str:
     """A short, filesystem-safe label derived from a command, for log filenames.
 
@@ -566,10 +584,7 @@ def _slug(cmd: str, maxlen: int = 40) -> str:
     tokens = cmd.strip().split()
     if tokens:
         tokens[0] = os.path.basename(tokens[0])
-    s = re.sub(r"[^a-z0-9]+", "-", " ".join(tokens).lower()).strip("-")
-    if len(s) > maxlen:
-        s = s[:maxlen].rstrip("-")
-    return s or "cmd"
+    return _slugify(" ".join(tokens), maxlen)
 
 
 def run(cmd: str, *, skip_on_error: bool = False, timeout: Optional[float] = None,
@@ -942,9 +957,8 @@ def once(key: str = "setup") -> bool:
 
 
 def _once_marker(key: str) -> Path:
-    slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[:40] or "key"
     h = hashlib.sha1(key.encode()).hexdigest()[:8]
-    return _logs_dir() / f"once-{slug}-{h}"
+    return _logs_dir() / f"once-{_slugify(key, fallback='key')}-{h}"
 
 
 def _begin_step(verb, cmd, log=None) -> None:

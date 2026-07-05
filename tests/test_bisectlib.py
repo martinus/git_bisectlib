@@ -327,10 +327,10 @@ class TestEngine(unittest.TestCase):
             "b.run('echo LIVE_MARKER; sleep 3')\n")
         env = {**os.environ, "PYTHONPATH": str(ROOT), "XDG_CACHE_HOME": cache,
                "NO_COLOR": "1"}
-        proc = subprocess.Popen([sys.executable, "recipe.py"], cwd=d,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, env=env)
-        try:
+        # `with` closes the stdout/stderr pipes (and waits) on exit — no leaked fds
+        with subprocess.Popen([sys.executable, "recipe.py"], cwd=d,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, env=env) as proc:
             deadline = time.time() + 2.5  # well before the 3s sleep ends
             live_log = running_step = False
             while time.time() < deadline and proc.poll() is None:
@@ -348,8 +348,6 @@ class TestEngine(unittest.TestCase):
             self.assertTrue(live_log, "log file did not stream output live")
             self.assertTrue(running_step, "no provisional running step recorded")
             self.assertIsNone(proc.poll(), "command exited; not a live check")
-        finally:
-            proc.wait()
         # once finished, the running placeholder is replaced by the real result
         ev = json.loads(next(Path(d, ".bisect").glob("*/eval.json")).read_text())
         self.assertEqual(len(ev["steps"]), 1)
@@ -666,6 +664,123 @@ class TestEngine(unittest.TestCase):
             d, "import bisectlib as b\n"
                "b.hammer('./nonexistent-binary', for_seconds=2, parallel=4)\n")
         self.assertEqual(code, 128)
+
+    # ----------------------------------------------------- git helper predicates
+    def test_git_helpers(self):
+        # sha()/subject()/touches()/is_clean() against a real HEAD, in-process so
+        # a clean tree is observable (no untracked recipe.py in the way).
+        sys.path.insert(0, str(ROOT))
+        import bisectlib as b
+        d = make_repo()  # single commit "c1" adding code.txt; tree is clean
+        head = sh(d, "git", "rev-parse", "HEAD").stdout.strip()
+        cwd0 = os.getcwd()
+        os.chdir(d)
+        try:
+            self.assertEqual(b.sha(), head)
+            self.assertEqual(b.subject(), "c1")
+            self.assertTrue(b.touches("code.txt"))   # the commit added it
+            self.assertFalse(b.touches("nope.txt"))
+            self.assertTrue(b.is_clean())            # freshly committed, nothing dirty
+            Path(d, "code.txt").write_text("changed")
+            self.assertFalse(b.is_clean())           # a tracked modification shows
+        finally:
+            os.chdir(cwd0)
+
+    def test_in_range_predicate(self):
+        # in_range(lo..hi) is True iff HEAD is within [lo, hi]; also the (lo, hi)
+        # form and the `sha in range` membership check.
+        sys.path.insert(0, str(ROOT))
+        import bisectlib as b
+        d = tempfile.mkdtemp(prefix="bl-range-")
+        sh(d, "git", "init", "-q")
+        sh(d, "git", "config", "user.email", "t@t.t")
+        sh(d, "git", "config", "user.name", "T")
+        shas = []
+        for i in range(1, 6):
+            Path(d, f"f{i}").write_text(str(i))
+            sh(d, "git", "add", "-A")
+            sh(d, "git", "commit", "-q", "-m", f"c{i}")
+            shas.append(sh(d, "git", "rev-parse", "HEAD").stdout.strip())
+        c1, c3, c4, c5 = shas[0], shas[2], shas[3], shas[4]
+        sh(d, "git", "checkout", "-q", c3)  # detached at the middle commit
+        cwd0 = os.getcwd()
+        os.chdir(d)
+        try:
+            self.assertTrue(bool(b.in_range(f"{c1}..{c5}")))    # c3 in c1..c5
+            self.assertFalse(bool(b.in_range(f"{c4}..{c5}")))   # c3 below c4
+            self.assertTrue(bool(b.in_range(c1, c5)))           # two-arg form
+            self.assertIn(c3, b.in_range(f"{c1}..{c5}"))        # membership
+            self.assertNotIn(c1, b.in_range(f"{c4}..{c5}"))
+        finally:
+            os.chdir(cwd0)
+
+    # ---------------------------------------------------------- feature coverage
+    def test_replace_accepts_a_compiled_regex(self):
+        # `old` as a re.Pattern edits by regex (vs literal str); still auto-reverts
+        d = make_repo()  # code.txt = "original\n"
+        body = ("import bisectlib as b, re\n"
+                "b.replace('code.txt', re.compile(r'orig\\w+'), 'PATCHED')\n"
+                "b.test('grep -q PATCHED code.txt')\n")
+        code, _, _ = run_recipe(d, body)
+        self.assertEqual(code, 0)
+        self.assertEqual(Path(d, "code.txt").read_text(), "original\n")  # reverted
+
+    def test_warmup_runs_are_excluded_from_the_verdict(self):
+        # the first `warmup` runs are throwaway. A command that fails twice then
+        # passes is GOOD with warmup=2 (the two failures are ignored), but BAD
+        # without warmup (the very first failure decides).
+        cmd = r"n=$(( $(cat c 2>/dev/null||echo 0)+1 )); echo $n>c; [ $n -ge 3 ]"
+        d = make_repo()
+        code, _, _ = run_recipe(
+            d, f"import bisectlib as b\nb.test({cmd!r}, warmup=2, attempts=1)\n")
+        self.assertEqual(code, 0)   # runs 1&2 (fail) are warmup; run 3 passes -> good
+        d2 = make_repo()
+        code2, _, _ = run_recipe(
+            d2, f"import bisectlib as b\nb.test({cmd!r}, attempts=1)\n")
+        self.assertEqual(code2, 1)  # no warmup: first run fails -> bad
+
+    def test_timeout_triggers_the_on_timeout_outcome(self):
+        # a command that exceeds `timeout` is killed and mapped via on_timeout.
+        d = make_repo()
+        self.assertEqual(  # test default on_timeout='skip'
+            run_recipe(d, "import bisectlib as b\nb.test('sleep 5', timeout=0.3)\n")[0],
+            125)
+        self.assertEqual(  # test on_timeout='bad' (a hang IS the regression)
+            run_recipe(d, "import bisectlib as b\n"
+                          "b.test('sleep 5', timeout=0.3, on_timeout='bad')\n")[0],
+            1)
+        self.assertEqual(  # run on_timeout='skip'
+            run_recipe(d, "import bisectlib as b\n"
+                          "b.run('sleep 5', timeout=0.3, on_timeout='skip')\n")[0],
+            125)
+
+    def test_fixup_when_false_runs_unpatched(self):
+        # a `when` predicate that is false leaves the block running unpatched.
+        d = make_repo()  # code.txt = "original\n"
+        Path(d, "code.txt").write_text("patched\n")
+        patch = sh(d, "git", "diff").stdout
+        sh(d, "git", "checkout", "--", "code.txt")
+        Path(d, "fix.patch").write_text(patch)
+        body = ("import bisectlib as b\n"
+                "with b.fixup('fix.patch', when=False):\n"
+                "    b.test('grep -q original code.txt')\n")  # unpatched -> passes
+        code, _, _ = run_recipe(d, body)
+        self.assertEqual(code, 0)
+        self.assertEqual(Path(d, "code.txt").read_text(), "original\n")
+
+    def test_configure_clean_removes_untracked_but_keeps_bisect(self):
+        # clean="clean" adds `git clean -fdx` to the revert, wiping untracked
+        # build junk between commits — but never the .bisect/ report dir.
+        d = make_repo()
+        body = ("import bisectlib as b\n"
+                "b.configure(clean='clean')\n"
+                "b.replace('code.txt', 'original', 'x')\n"   # arms the tree revert
+                "open('junk.txt', 'w').write('untracked build artifact')\n"
+                "b.test('true')\n")
+        code, _, _ = run_recipe(d, body)
+        self.assertEqual(code, 0)
+        self.assertFalse(Path(d, "junk.txt").exists(), "untracked junk not cleaned")
+        self.assertTrue(Path(d, ".bisect").exists(), ".bisect/ must survive clean")
 
 
 if __name__ == "__main__":
