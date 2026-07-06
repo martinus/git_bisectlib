@@ -344,8 +344,8 @@ trigger; there is deliberately **no** fragile "am I running under `git bisect ru
     the commit or moves HEAD.
 - **Candidate commits follow a widening time schedule.** People reason about regressions in
   calendar terms ("try a month ago"), so probes step back through *time* from HEAD's commit
-  date on a widening schedule — 1 day, 1 week, 2 weeks, 1 month, 2 months, then doubling out to
-  years (`_TIME_OFFSETS_DAYS`). Each offset resolves to an ancestor of HEAD by date
+  date on a widening schedule — 1 day, 3 days, 1 week, 2 weeks, 1 month, 2 months, stopping
+  there (`_TIME_OFFSETS_DAYS`). Each offset resolves to an ancestor of HEAD by date
   (`git rev-list -1 --before=<date> HEAD`), deduped nearest-first; offsets past the start of
   history are dropped. Candidates are rendered as `git log` one-liners (short sha, committer
   date, relative age, subject, author — colored to the terminal) so the user can eyeball where

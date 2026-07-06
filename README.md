@@ -271,21 +271,21 @@ python recipe.py          # ← run the recipe yourself
 ```
 
 Because HEAD is already known-bad, the recipe **doesn't waste time re-testing it** — it
-points you at older commits instead, spaced by a **widening time schedule** (a day back, a
-week, two weeks, a month, two months, then on into years) so a handful of probes span a lot
-of history. Each is shown `git log`-style — short sha, date, how long ago, subject, author —
-so you can eyeball where to jump; copy a sha into `git checkout`:
+points you at older commits instead, spaced by a **widening time schedule** (1 day, 3 days, 1
+week, 2 weeks, 1 month, 2 months back) so a handful of probes span a couple of months of
+history. Each is shown `git log`-style — short sha, date, how long ago, subject, author — so
+you can eyeball where to jump; copy a sha into `git checkout`:
 
 ```text
 ━━━ already marked bad — skipping ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ● HEAD (5fa8b7503) is already marked BAD — nothing to test.
   To find a GOOD commit, git checkout an older one and run it there:
-    ec0acd2 2026-06-30 5 days ago    fix cache eviction        <Martin Leitner-Ankerl>
-    7fb9e4a 2026-06-24 12 days ago   refactor loader           <Martin Leitner-Ankerl>
-    356a26b 2026-06-11 3 weeks ago   bump deps                 <Martin Leitner-Ankerl>
-    c196853 2026-05-27 6 weeks ago   tune scheduler            <Martin Leitner-Ankerl>
-    85fb7c9 2026-05-01 2 months ago  add spec + bisectlog      <Martin Leitner-Ankerl>
-    a59303d 2026-03-02 4 months ago  rework parser             <Martin Leitner-Ankerl>
+    ec0acd2 2026-07-05 1 day ago     fix cache eviction        <Martin Leitner-Ankerl>
+    7fb9e4a 2026-07-03 3 days ago    refactor loader           <Martin Leitner-Ankerl>
+    356a26b 2026-06-29 1 week ago    bump deps                 <Martin Leitner-Ankerl>
+    c196853 2026-06-22 2 weeks ago   tune scheduler            <Martin Leitner-Ankerl>
+    85fb7c9 2026-06-06 4 weeks ago   add spec + bisectlog      <Martin Leitner-Ankerl>
+    a59303d 2026-05-07 2 months ago  rework parser             <Martin Leitner-Ankerl>
 
     python recipe.py       # run again after checking out
 ```

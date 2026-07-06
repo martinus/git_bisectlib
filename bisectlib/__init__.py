@@ -33,8 +33,8 @@ Verbs:
 
 Guided mode (automatic): while a bisect is started with a bad commit but no good
 one yet, running `python recipe.py` by hand prints the copy-pasteable next step —
-older candidate commits to try (spaced by a widening time schedule: a day, a week,
-a month, …) until you find the good anchor, then the `git bisect run` hand-off. A
+older candidate commits to try (spaced by a widening time schedule from a day out
+to two months) until you find the good anchor, then the `git bisect run` hand-off. A
 commit that won't build offers a direction choice rather than a verdict. Silent
 during a real `git bisect run`.
 """
@@ -720,9 +720,9 @@ def _searched_depth() -> int:
 # The hunt for a good commit walks back through *time* — commit density is too
 # uneven for "N commits back" to feel predictable, and thinking in calendar
 # distance ("try a month ago") is how people actually reason about regressions.
-# The schedule widens: a day, a week, two weeks, a month, two months, then
-# doubling out to years, so a handful of probes span a huge range of history.
-_TIME_OFFSETS_DAYS = (1, 7, 14, 30, 60, 120, 240, 365, 730, 1460)
+# The schedule widens from a day out to two months; going further back is rarely
+# worth an extra probe, so it stops there.
+_TIME_OFFSETS_DAYS = (1, 3, 7, 14, 30, 60)
 
 
 def _candidate_shas() -> list:

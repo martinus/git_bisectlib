@@ -946,13 +946,14 @@ class TestGuided(unittest.TestCase):
         self.assertNotIn("NEWER", err)
 
     def test_candidates_are_time_spaced_with_age(self):
-        # First hunt: several older commits, spaced by a widening time schedule and
-        # rendered git-log style — short sha, date, and relative age ("N unit ago").
-        d, _ = make_history_repo(120)                  # enough history for many probes
+        # First hunt: several older commits, spaced by the widening time schedule
+        # (1,3,7,14,30,60 days) and rendered git-log style — short sha, date, and
+        # relative age ("N unit ago"). Daily commits so the offsets stay distinct.
+        d, _ = make_history_repo(90, step_days=1)
         self.start_bad(d)
         _, err = run_guided(d, self.GOOD)
         rows = re.findall(r"^ +[0-9a-f]{7,} \d{4}-\d{2}-\d{2} .*ago", err, re.M)
-        self.assertGreaterEqual(len(rows), 5)          # "many more" than the old three
+        self.assertGreaterEqual(len(rows), 5)          # a handful of probes, not three
 
     def test_silent_when_good_is_known(self):
         # Once a good commit exists, git is doing the real binary search — guided
