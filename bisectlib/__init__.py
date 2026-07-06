@@ -1428,7 +1428,7 @@ def replace(path: str, old: Union[str, "re.Pattern"], new: str, *,
     old_str = old.pattern if isinstance(old, re.Pattern) else str(old)
     _final.setdefault("fixups", []).append(
         {"kind": "replace", "path": path,
-         "detail": f"{old_str} → {new}"})
+         "old": old_str, "new": new})
     sys.stderr.write(f"  edit {path}: {n} replacement(s)\n")
 
 

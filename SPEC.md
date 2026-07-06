@@ -402,14 +402,14 @@ regenerated each time and self-heals if deleted. git's log is the single source 
    correctly handles both `git bisect start <bad> <good>` (anchors on the start line) and
    the interactive form (separate first `bad`/`good` lines).
 3. Once both bounds exist (bisect is "ready"), every subsequent marking is one **row**:
-   - `midpoint` = the marking's sha
+   - `probe` = the marking's sha
    - `status`   = the marking's term (good/bad/skip)
    - input range `bad`/`good` = the bounds *as they stood before this marking*
    - then apply: `bad`→lowers `bad`, `good`→raises `good` (newest-by-ancestry good is the
      range bound), `skip`→bounds unchanged
 4. `range` cell per row = git queries on the two bound shas: dates via `git show -s
    --format=%ci`, duration = their delta, count = `git rev-list --count <good>..<bad>`.
-5. **In-flight row:** the current `HEAD` is the midpoint being tested right now and is not
+5. **In-flight row:** the current `HEAD` is the probe being tested right now and is not
    in the log yet — synthesize a trailing `🕒 todo` row for it (from `git rev-parse HEAD`)
    when `HEAD` isn't already the last logged marking.
 6. Header `original range` + `resume:` line come from the anchors / current bounds; both
@@ -509,9 +509,9 @@ predictable path you can keep open — there's no continuity to preserve.
 then just **read the last row → `git bisect start <bad> <good>`** (or copy the top
 `resume:` line). A SKIP row doesn't move the bounds, so it repeats the previous range.
 
-Each row reads in causal order: **the input range (`bad` / `good`) → the `midpoint` we
+Each row reads in causal order: **the input range (`bad` / `good`) → the `probe` we
 picked to evaluate → the `status` result.** `bad`/`good` are the range *as it stood
-before this evaluation* (the range that made git bisect pick this midpoint), so you watch
+before this evaluation* (the range that made git bisect pick this probe), so you watch
 the range funnel down as you scan top-to-bottom.
 
 Five columns:
@@ -520,7 +520,7 @@ Five columns:
 |---|---|
 | **good** | good bound of the input range — **commit hash + date + author** |
 | **bad** | bad bound of the input range — **commit hash + date + author** |
-| **midpoint** | the commit picked to evaluate this step — **commit hash + date + author** |
+| **probe** | the commit picked to evaluate this step — **commit hash + date + author** |
 | **range** | the `good..bad` range as **duration · commit count** (no dates) |
 | **status** | evaluation result with an icon: `🕒 todo` / `🟢 good` / `🔴 bad` / `⏭️ skip` (`🛑 abort`) |
 
@@ -534,7 +534,7 @@ recipe locks in a verdict its sidecar records it (`pending: false`) so the saved
 **original range:** good v1.0 `a1b2c3` · bad HEAD `f6e5d4`
 **resume:** `git bisect start 5d6e7f 9a8b7c`   ← post-last-result range; copy-paste to restart
 
-| good | bad | midpoint | range | status |
+| good | bad | probe | range | status |
 |------|-----|----------|-------|--------|
 | `a1b2c3` 2026-03-01 09:12, Ada | `f6e5d4` 2026-05-23 20:41, Bruno | `9a8b7c` 2026-04-15 11:06, Cleo | 83d 11h · 264 commits | 🟢 good |
 | `9a8b7c` 2026-04-15 11:06, Cleo | `f6e5d4` 2026-05-23 20:41, Bruno | `5d6e7f` 2026-05-04 14:20, Dev | 41d 06h · 132 commits | 🔴 bad |
@@ -547,8 +547,8 @@ recipe locks in a verdict its sidecar records it (`pending: false`) so the saved
   <every good so far>` (excluding ancestors of **all** goods, not just the latest —
   in a merge DAG the goods can diverge, so counting only `latest_good..bad` overcounts).
 - The result **updates the bounds for the *next* row**: a `good` raises `good` to the
-  midpoint; a `bad` lowers `bad` to it; a `skip` leaves the bounds unchanged (git bisect
-  just picks another midpoint inside the same range — see rows 2→3).
+  probe; a `bad` lowers `bad` to it; a `skip` leaves the bounds unchanged (git bisect
+  just picks another probe inside the same range — see rows 2→3).
 - The top-of-file **`resume:`** line is the *post-last-result* range, as a copy-pasteable
   `git bisect start <bad> <good>` — restarting needs only that one line.
 - When the range's commit count reaches 1, the `bad` commit is the **first bad commit**

@@ -83,9 +83,9 @@ class TestReport(unittest.TestCase):
         rep = _report.build_report(d)
         self.assertIsNotNone(rep)
         self.assertGreaterEqual(len(rep.rows), 1)
-        # first row's midpoint is the first commit git checked out
+        # first row's probe is the first commit git checked out
         first = rep.rows[0]
-        self.assertEqual(first.midpoint, head1)
+        self.assertEqual(first.probe, head1)
         self.assertEqual(first.status, "bad" if has_bug else "good")
         # there should be an in-flight todo row for the new HEAD
         self.assertTrue(rep.in_progress)
@@ -106,7 +106,7 @@ class TestReport(unittest.TestCase):
     def test_range_count_excludes_all_goods(self):
         # In a merge DAG, git's candidate range excludes ancestors of EVERY good,
         # not just the latest. With a good anchor on a side branch that diverges
-        # from the mainline midpoint, counting only `latest_good..bad` overcounts.
+        # from the mainline probe, counting only `latest_good..bad` overcounts.
         d = tempfile.mkdtemp(prefix="bisect-report-dag-")
         run(d, "git", "init", "-q")
         run(d, "git", "config", "user.email", "t@t.t")
@@ -184,8 +184,8 @@ class TestReport(unittest.TestCase):
             without_sc = _report.build_report(d)  # no sidecar → no invented row
         finally:
             _report.is_ancestor = orig
-        self.assertIn(head, [r.midpoint for r in with_sc.rows])
-        self.assertNotIn(head, [r.midpoint for r in without_sc.rows])
+        self.assertIn(head, [r.probe for r in with_sc.rows])
+        self.assertNotIn(head, [r.probe for r in without_sc.rows])
         run(d, "git", "bisect", "reset")
 
     def test_cells_show_date_and_author_not_subject(self):
@@ -256,12 +256,12 @@ class TestReport(unittest.TestCase):
         # a finalized sidecar surfaces the real verdict on the in-flight row
         write(pending=False, outcome="bad")
         rep = _report.build_report(d, logs_dir=logs)
-        row = next(r for r in rep.rows if r.midpoint == head)
+        row = next(r for r in rep.rows if r.probe == head)
         self.assertEqual(row.status, "bad")
         # while still pending, it stays `todo`
         write(pending=True, outcome="good")
         rep = _report.build_report(d, logs_dir=logs)
-        row = next(r for r in rep.rows if r.midpoint == head)
+        row = next(r for r in rep.rows if r.probe == head)
         self.assertEqual(row.status, "todo")
         run(d, "git", "bisect", "reset")
 
@@ -280,7 +280,7 @@ class TestReport(unittest.TestCase):
             rep = _report.build_report(d)
         finally:
             _report.is_ancestor = orig
-        self.assertIn(m1, [r.midpoint for r in rep.rows])
+        self.assertIn(m1, [r.probe for r in rep.rows])
         run(d, "git", "bisect", "reset")
 
     def test_render_format(self):
@@ -291,13 +291,13 @@ class TestReport(unittest.TestCase):
         rep = _report.build_report(d)
         rep.rows[0].sidecar = _report.Sidecar(
             fixups=[{"kind": "replace", "path": "f",
-                     "detail": "OLD_VALUE → NEW_VALUE"}], steps=[])
+                     "old": "OLD_VALUE", "new": "NEW_VALUE"}], steps=[])
         md = _report.render_markdown(rep, details=True)
-        self.assertIn("| good | bad | midpoint | range | status |", md)
+        self.assertIn("| good | bad | probe | range | status |", md)
         self.assertRegex(md, r"🟢|🔴")                     # status icons
         self.assertNotIn("✅", md)
         self.assertNotIn("→ ", md.split("## Details")[0])  # no dates/arrows in range
-        self.assertIn("`OLD_VALUE → NEW_VALUE`", md)        # full fixup in backticks
+        self.assertIn("in `f`: `OLD_VALUE` → `NEW_VALUE`", md)
         run(d, "git", "bisect", "reset")
 
     def test_no_bisect_returns_none(self):

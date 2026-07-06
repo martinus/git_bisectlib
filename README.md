@@ -135,7 +135,7 @@ Date:   2026-06-15 11:40:00 +0200
  1 file changed, 6 insertions(+), 6 deletions(-)
 ```
 
-| good | bad | midpoint | range | status |
+| good | bad | probe | range | status |
 |------|-----|----------|-------|--------|
 | `2801e9572` …, Bob | `79cb050c2` …, Alice | `cb5394973` …, Carol | 27d 15h · 11 commits | 🟢 good |
 | `cb5394973` …, Carol | `79cb050c2` …, Alice | `95345541b` …, Dan | 12d 7h · 6 commits | 🔴 bad · 81.2s |
@@ -143,7 +143,7 @@ Date:   2026-06-15 11:40:00 +0200
 | `cb5394973` …, Carol | `5c9dcafb3` …, Eve | `19d89b121` …, Fay | 3d 5h · 2 commits | 🟢 good |
 ````
 
-Each row reads in causal order — the **input range** (`good`/`bad`) → the **midpoint** git
+Each row reads in causal order — the **input range** (`good`/`bad`) → the **probe** git
 chose → the **result** — so you see the range funnel down as you scan. The report is
 re-rendered the moment each command *starts*, links every step to its live-streamed log
 under `.bisect/<sha>/`, and — when the search resolves — shows the culprit the way

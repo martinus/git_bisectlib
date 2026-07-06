@@ -123,7 +123,7 @@ class Sidecar:
 class Row:
     bad: str          # input-range bad bound (sha) before this evaluation
     good: str         # input-range good bound (sha) before this evaluation
-    midpoint: str     # the commit evaluated this step
+    probe: str     # the commit evaluated this step
     status: str       # good | bad | skip | todo
     n_commits: int = 0          # candidate commits still in range at this step
     span_seconds: int = 0       # wall span between good and bad commit dates
@@ -229,7 +229,7 @@ def build_report(
     current_good: Optional[str] = None
     active_goods: list[str] = []   # every good marked so far (defines the range)
     rows: list[Row] = []
-    seen_midpoints: set[str] = set()
+    seen_probes: set[str] = set()
 
     def ready() -> bool:
         return current_bad is not None and current_good is not None
@@ -259,17 +259,17 @@ def build_report(
         if current_good is None or is_ancestor(repo, current_good, sha):
             current_good = sha
 
-    def add_row(midpoint: str, status: str) -> None:
+    def add_row(probe: str, status: str) -> None:
         rows.append(
             Row(
                 bad=current_bad,
                 good=current_good,
-                midpoint=midpoint,
+                probe=probe,
                 status=status,
                 goods=list(active_goods),
             )
         )
-        seen_midpoints.add(midpoint)
+        seen_probes.add(probe)
 
     for verb, args in ops:
         revs = [a for a in args if not a.startswith("-")]
@@ -338,14 +338,14 @@ def build_report(
         if n_remaining <= 1:
             first_bad = current_bad
 
-    # In-flight row: HEAD is the midpoint git currently has checked out, awaiting a
+    # In-flight row: HEAD is the probe git currently has checked out, awaiting a
     # verdict, and is not yet a logged marking.
     in_progress = False
     if (
         ready()
         and first_bad is None
         and head
-        and head not in seen_midpoints
+        and head not in seen_probes
         and head != current_good
     ):
         within_range = (
@@ -355,7 +355,7 @@ def build_report(
         # A per-commit sidecar written by the engine is proof HEAD is the commit
         # being evaluated right now — trust it when the ancestry checks can't
         # confirm the range (shallow/grafted clone, or an anchor good that isn't a
-        # topological ancestor of the midpoint). This keeps status.md live (the
+        # topological ancestor of the probe). This keeps status.md live (the
         # in-flight row and its steps refresh after every command) on such repos.
         has_sidecar = bool(logs_dir) and (Path(logs_dir) / head / "eval.json").is_file()
         if within_range or has_sidecar:
@@ -365,7 +365,7 @@ def build_report(
     # Gather subjects + dates for every sha we reference.
     shas = set()
     for r in rows:
-        shas.update([r.bad, r.good, r.midpoint])
+        shas.update([r.bad, r.good, r.probe])
     shas.update([orig_bad, current_bad, current_good, *orig_goods])
     shas.discard(None)
     subjects, dates, authors = _commit_meta(repo, shas)
@@ -381,7 +381,7 @@ def build_report(
             r.bad_date = dates.get(r.bad, "")
             r.span_seconds = _date_delta_seconds(r.good_date, r.bad_date)
         if logs_dir:
-            r.sidecar = _load_sidecar(logs_dir, r.midpoint)
+            r.sidecar = _load_sidecar(logs_dir, r.probe)
 
     # The in-flight commit (HEAD) is a `todo` row because git hasn't recorded its
     # mark yet — but if the recipe already finished and its sidecar carries a
@@ -640,7 +640,7 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
         lines.append(f"> ⚠️ {rep.note}")
     lines.append("")
 
-    lines.append("| good | bad | midpoint | range | status |")
+    lines.append("| good | bad | probe | range | status |")
     lines.append("|------|-----|----------|-------|--------|")
     for r in rep.rows:
         rng = f"{fmt_duration(r.span_seconds)} · {r.n_commits} commits"
@@ -649,7 +649,7 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
         if extra:
             status += f" · {extra}"
         lines.append(
-            f"| {cell(r.good)} | {cell(r.bad)} | {cell(r.midpoint)} | {rng} | {status} |"
+            f"| {cell(r.good)} | {cell(r.bad)} | {cell(r.probe)} | {rng} | {status} |"
         )
     lines.append("")
 
@@ -660,15 +660,20 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
             lines.append("")
             for r in detail_rows:
                 lines.append(
-                    f"### `{rep.short(r.midpoint)}` — {rep.subject(r.midpoint)} "
+                    f"### `{rep.short(r.probe)}` — {rep.subject(r.probe)} "
                     f"({icon(r.status)})"
                 )
-                if r.sidecar.fixups:
-                    fx = ", ".join(
-                        f"{f.get('kind')}: `{f.get('detail', f.get('path',''))}`"
-                        for f in r.sidecar.fixups
-                    )
-                    lines.append(f"- fixups: {fx}")
+                for f in r.sidecar.fixups:
+                    kind = f.get("kind", "")
+                    if kind == "replace":
+                        lines.append(
+                            f"- replace: in `{f['path']}`: "
+                            f"`{f['old']}` → `{f['new']}`"
+                        )
+                    else:
+                        lines.append(
+                            f"- {kind}: `{f.get('detail', f.get('path', ''))}`"
+                        )
                 for s in r.sidecar.steps:
                     if s.verb != "hammer":
                         continue
@@ -693,7 +698,7 @@ def render_markdown(rep: Report, details: bool = False, color: bool = True) -> s
                     # link the step to its captured log file (relative to status.md,
                     # which sits alongside the per-commit <sha>/ log dirs); the log
                     # streams live, so the link is watchable while the step runs
-                    step = f"[{s.verb}]({r.midpoint}/{s.log})" if s.log else s.verb
+                    step = f"[{s.verb}]({r.probe}/{s.log})" if s.log else s.verb
                     lines.append(
                         f"| {step} | `{s.cmd}` | {code} | {dur} |"
                     )
