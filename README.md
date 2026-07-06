@@ -326,6 +326,8 @@ From here it's the normal automated bisect. A few things worth knowing:
       50fa29e 2026-04-25 2 months ago tune scheduler       <Martin Leitner-Ankerl>
     NEWER — come back toward code that builds:
       1785673 2026-07-02 4 days ago   refactor loader      <Martin Leitner-Ankerl>
+      9c2d4f1 2026-06-28 1 week ago   bump deps            <Martin Leitner-Ankerl>
+      a30b6ee 2026-06-14 3 weeks ago  tune scheduler       <Martin Leitner-Ankerl>
 
       python recipe.py       # run again after checking out
   ```

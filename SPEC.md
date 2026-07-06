@@ -350,7 +350,8 @@ trigger; there is deliberately **no** fragile "am I running under `git bisect ru
   history are dropped. Candidates are rendered as `git log` one-liners (short sha, committer
   date, relative age, subject, author — colored to the terminal) so the user can eyeball where
   to jump and copy a sha into `git checkout`. The build-failure menu's **older** direction is
-  this same list; **newer** is the commit midway (by count) between HEAD and the newest bad.
+  this same list; **newer** applies the same schedule *forward* from HEAD toward the newest bad
+  (never reaching it), so both directions offer a spread of commits, not a single jump.
 
 ---
 

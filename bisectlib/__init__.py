@@ -65,7 +65,7 @@ from typing import Callable, Literal, NoReturn, Optional, Union
 _BadWhen = Literal["fail", "pass"]
 _OnTimeout = Literal["abort", "skip", "bad"]
 
-__version__ = "0.16.0"
+__version__ = "0.16.1"
 
 __all__ = [
     "run", "test", "hammer", "check",       # the verbs
@@ -689,32 +689,25 @@ def _guided_state() -> dict:
     return _guided
 
 
-def _commit_meta(rev: str):
-    """(full_sha, short, date, subject) for a rev, or None if it doesn't resolve.
-
-    ``date`` is the committer date (``%cs`` = YYYY-MM-DD) so the guidance can show
-    *when* a candidate commit is even though the search now steps by commit count.
-    """
-    full = _git("rev-parse", "--verify", f"{rev}^{{commit}}", check=False)
-    if not full:
-        return None
-    try:
-        short, date, subject = _git(
-            "show", "-s", "--format=%h%x09%cs%x09%s", full).split("\t", 2)
-    except (RuntimeError, ValueError):
-        return (full, full[:9], "", "")
-    return (full, short, date, subject)
+def _commit_ts(rev: str) -> Optional[int]:
+    """The committer unix timestamp of `rev`, or None if it doesn't resolve."""
+    out = _git("show", "-s", "--format=%ct", rev, check=False)
+    return int(out) if out.isdigit() else None
 
 
-def _searched_depth() -> int:
-    """How many commits back from HEAD we've already ruled bad — the number of
-    commits between HEAD and the newest known-bad anchor (0 on the first hunt)."""
-    g = _guided_state()
-    anchor, head = g.get("anchor"), g.get("head")
-    if not (anchor and head):
-        return 0
-    c = _git("rev-list", "--count", f"{head}..{anchor}", check=False)
-    return int(c) if c.isdigit() else 0
+def _shas_by_date(walk: str, targets: list, exclude: set) -> list:
+    """For each unix timestamp in `targets` (in order), the newest ancestor of
+    `walk` at/before it — deduped, skipping `exclude`. This turns a list of
+    calendar offsets into a list of real commits along `walk`'s history."""
+    out: list = []
+    seen = set(exclude)
+    for ts in targets:
+        iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        sha_ = _git("rev-list", "-1", f"--before={iso}", walk, check=False)
+        if sha_ and sha_ not in seen:
+            seen.add(sha_)
+            out.append(sha_)
+    return out
 
 
 # The hunt for a good commit walks back through *time* — commit density is too
@@ -729,24 +722,11 @@ def _candidate_shas() -> list:
     """Older commits to try next, spaced by the widening time schedule back from
     HEAD's commit date. Deduped, nearest first, ancestors of HEAD only, dropping
     any offset that lands past the start of history."""
-    g = _guided_state()
-    head = g.get("head")
-    if not head:
+    head = _guided_state().get("head")
+    ts = _commit_ts(head) if head else None
+    if ts is None:
         return []
-    try:
-        head_ts = int(_git("show", "-s", "--format=%ct", head))
-    except (RuntimeError, ValueError):
-        return []
-    out: list = []
-    seen: set = set()
-    for days in _TIME_OFFSETS_DAYS:
-        target = head_ts - days * 86400
-        iso = datetime.fromtimestamp(target, tz=timezone.utc).isoformat()
-        sha_ = _git("rev-list", "-1", f"--before={iso}", head, check=False)
-        if sha_ and sha_ != head and sha_ not in seen:
-            seen.add(sha_)
-            out.append(sha_)
-    return out
+    return _shas_by_date(head, [ts - d * 86400 for d in _TIME_OFFSETS_DAYS], {head})
 
 
 # The one-line-per-commit format the report/guidance render candidates with:
@@ -769,19 +749,19 @@ def _log_lines(shas: list) -> list:
     return ["    " + ln for ln in lines]
 
 
-def _newer_sha() -> Optional[str]:
-    """A commit between HEAD and the newest-bad anchor — used only by the build-break
-    menu, to offer a *newer* (likelier-to-build) direction. None if the bad range is
-    empty (HEAD is the anchor) or it can't be resolved."""
+def _newer_shas() -> list:
+    """Commits between HEAD and the newest-bad anchor — the build-break menu's
+    *newer* (likelier-to-build) direction. Mirrors the older schedule but steps
+    *forward* from HEAD toward the anchor (never reaching the anchor itself, since
+    it's the known-bad boundary). Empty if the bad range is empty (HEAD == anchor)."""
     g = _guided_state()
     anchor, head = g.get("anchor"), g.get("head")
-    depth = _searched_depth()
-    if not anchor or depth < 2:
-        return None
-    meta = _commit_meta(f"{anchor}~{depth // 2}")
-    if not meta or meta[0] in (head, anchor):
-        return None
-    return meta[0]
+    ht = _commit_ts(head) if head else None
+    at = _commit_ts(anchor) if anchor else None
+    if ht is None or at is None or at <= ht:
+        return []
+    targets = [min(ht + d * 86400, at - 1) for d in _TIME_OFFSETS_DAYS]
+    return _shas_by_date(anchor, targets, {head, anchor})
 
 
 # guided output — colored, copy-pasteable next steps -------------------------
@@ -909,10 +889,10 @@ def _guided_build_break() -> None:
              "",
              _g_text("OLDER — jump past the break (often toolchain drift):")]
     lines += _g_candidate_lines()
-    newer = _newer_sha()
+    newer = _newer_shas()
     if newer:
         lines += ["", _g_text("NEWER — come back toward code that builds:")]
-        lines += _log_lines([newer])
+        lines += _log_lines(newer)
     lines += ["", _g_cmd(recipe, "run again after checking out"), "",
               _g_text("If instead the recipe/build script is what's broken (not the"),
               _g_text("commit), fix it and re-run — or let the recipe route around"),

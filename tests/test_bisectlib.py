@@ -921,6 +921,10 @@ class TestGuided(unittest.TestCase):
         self.assertIn("OLDER", err)
         self.assertIn("NEWER", err)                    # both directions available
         self.assertIn("skip_on_error=True", err)       # the recipe-side escape hatch
+        # NEWER offers a spread of commits (stepping forward toward the bad), not one
+        newer_rows = re.findall(r"^ +[0-9a-f]{7,} \d{4}-\d{2}-\d{2}",
+                                err.split("NEWER", 1)[1], re.M)
+        self.assertGreaterEqual(len(newer_rows), 2)
 
     def test_recipe_error_is_distinct_from_a_build_break(self):
         # An uncaught error is a recipe bug, not an unbuildable commit — so it says
